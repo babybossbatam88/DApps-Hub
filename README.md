@@ -76,6 +76,37 @@ curl -s localhost:3000/api/chain/verify-contracts | jq   # address assertions
 | `npm run verify` | All four, in order — the gate between phases |
 | `npm run db:generate` / `db:migrate` / `db:studio` | Prisma |
 
+## Standalone single-file terminal
+
+`standalone/lp-command-center.html` is the whole terminal in one file — no build,
+no server, no dependencies. Open it in a browser.
+
+```bash
+open standalone/lp-command-center.html        # macOS
+xdg-open standalone/lp-command-center.html    # Linux
+```
+
+Two modes:
+
+- **DEMO** — all 14 screens with a fixture position. Only the *inputs* are
+  fixtures; every figure is produced by the same engine live mode uses, so a
+  bug in the maths shows up in demo mode too.
+- **LIVE** — paste a public address and a Base RPC endpoint. It discovers your
+  Uniswap V3 positions from the browser and computes inventory, price, range
+  state, uncollected fees, LP vs HODL, divergence, and a rebalance signal.
+  Nothing is sent anywhere except the RPC endpoint you name.
+
+Fully working there: position discovery, valuation, uncollected fees (with the
+uint256 wrap masking), range engine, rebalance recommendations, live alert
+conditions, and the simulation lab.
+
+Deliberately absent, because they need a server: fee APR, time in range,
+30/90/365 performance, the portfolio chart, Binance account access, background
+sync, and a truly immutable entry basis. Those screens say so rather than
+showing a plausible number. The entry basis is read from chain logs where the
+endpoint allows a full-history `eth_getLogs`, and otherwise entered by hand and
+kept in that browser's localStorage.
+
 ## Documentation
 
 | Document | Contents |

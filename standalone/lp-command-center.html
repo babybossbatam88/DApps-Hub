@@ -1,0 +1,2361 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>LP Command Center — standalone</title>
+<!--
+  LP COMMAND CENTER — single-file terminal
+  ==========================================================================
+  One HTML file, no build step, no server, no dependencies. Open it and it runs.
+
+  TWO MODES, and the distinction is the whole point:
+
+    LIVE  — talks to a Base JSON-RPC endpoint directly from your browser.
+            Discovers Uniswap V3 positions for a public address and computes
+            everything that is derivable from a single read: inventory, price,
+            range state, uncollected fees, LP vs HODL, divergence, rebalance
+            signal. Real numbers from a real chain.
+
+    DEMO  — the same screens with a fixture position. Only the *inputs* are
+            fixtures (ticks, liquidity, fee growth); every figure on screen is
+            produced by the same engine LIVE uses. Labelled on every screen.
+
+  WHAT THIS FILE DELIBERATELY CANNOT DO, and why the server app exists:
+    · No database, so no snapshot history — no fee APR, no time-in-range,
+      no 30/90/365 performance, no portfolio chart over time.
+    · No immutable entry basis. It reads the basis from chain logs where the
+      endpoint allows it, otherwise you enter it and it lives in localStorage.
+    · No Binance account access. An API secret in a browser file is exactly
+      what a read-only design is supposed to prevent.
+    · No background sync and no alert delivery.
+  Screens that need those say so instead of showing a plausible number.
+
+  READ-ONLY BY CONSTRUCTION: this file contains no signing code, no private key
+  handling, and no ABI entry for mint, burn, collect, swap, or any state-changing
+  call. It cannot send a transaction. It never asks for a seed phrase.
+  ==========================================================================
+-->
+<style>
+  :root {
+    --void: #05070d;
+    --base: #080b14;
+    --surface: #0e1320;
+    --raised: #141a2a;
+    --border: #1e2637;
+    --border-strong: #2c3650;
+    --fg: #e8ecf5;
+    --muted: #8b95ab;
+    --faint: #5b6479;
+    --pos: #2ebd85;
+    --neg: #f0616d;
+    --warn: #f0b90b;
+    --info: #4c8dff;
+    --radius: 16px;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  /* Leave room for the sticky header and the fixed mobile tab bar, so anything
+     scrolled into view lands in the readable band rather than under chrome. */
+  html { scroll-padding-top: 68px; scroll-padding-bottom: 84px; }
+  html, body { margin: 0; padding: 0; background: var(--base); color: var(--fg); }
+  body { font-family: var(--sans); font-size: 14px; -webkit-font-smoothing: antialiased; }
+  .mono, table td.num, .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  a { color: var(--info); }
+  button { font: inherit; }
+  :focus-visible { outline: 2px solid var(--info); outline-offset: 2px; border-radius: 4px; }
+
+  /* ---- layout ---- */
+  .shell { display: flex; min-height: 100dvh; }
+  .side {
+    width: 232px; flex: 0 0 232px; background: var(--void);
+    border-right: 1px solid var(--border); position: sticky; top: 0; height: 100dvh;
+    display: flex; flex-direction: column;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; height: 56px; padding: 0 16px; border-bottom: 1px solid var(--border); }
+  .brand .mark { width: 28px; height: 28px; border-radius: 7px; background: rgba(76,141,255,.15); color: var(--info); display: grid; place-items: center; }
+  .brand b { font-size: 13px; display: block; line-height: 1.1; }
+  .brand span { font-size: 10px; letter-spacing: .14em; color: var(--faint); text-transform: uppercase; }
+  .navwrap { flex: 1; overflow-y: auto; padding: 12px 8px; }
+  .navgroup { margin-bottom: 16px; }
+  .navgroup h6 { margin: 0 0 6px; padding: 0 10px; font-size: 10px; letter-spacing: .14em; color: var(--faint); text-transform: uppercase; }
+  .nav { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: 0; border-radius: 9px; background: transparent; color: var(--muted); font-size: 13px; cursor: pointer; text-align: left; }
+  .nav:hover { background: var(--surface); color: var(--fg); }
+  .nav.on { background: var(--raised); color: var(--fg); font-weight: 500; }
+  .ico { width: 16px; height: 16px; flex: 0 0 16px; }
+  .nav .ico { color: var(--faint); }
+  .nav.on .ico { color: var(--info); }
+  .sidefoot { padding: 12px 16px; border-top: 1px solid var(--border); font-size: 10px; line-height: 1.5; color: var(--faint); }
+
+  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .top { position: sticky; top: 0; z-index: 30; height: 56px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 24px; background: rgba(8,11,20,.92); backdrop-filter: blur(8px); border-bottom: 1px solid var(--border); }
+  .content { flex: 1; padding: 20px 24px 96px; }
+  .inner { max-width: 1400px; margin: 0 auto; }
+  @media (max-width: 1023px) {
+    .side { display: none; }
+    .content { padding: 16px 16px 104px; }
+    .top { padding: 0 16px; }
+  }
+
+  .tabbar { display: none; }
+  @media (max-width: 1023px) {
+    /* minmax(0,1fr), not 1fr: with 1fr each tab keeps its min-content width and
+       five of them push the fixed bar wider than the viewport, which drags the
+       whole page into horizontal overflow. */
+    .tabbar { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; background: rgba(5,7,13,.96); backdrop-filter: blur(8px); border-top: 1px solid var(--border); padding-bottom: env(safe-area-inset-bottom); }
+    .tab { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 9px 0; border: 0; background: transparent; color: var(--faint); font-size: 10px; font-weight: 500; cursor: pointer; }
+    .tab .ico { width: 19px; height: 19px; flex: 0 0 19px; }
+    .tab { min-width: 0; }
+    .tab span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tab.on { color: var(--info); }
+  }
+
+  /* ---- primitives ---- */
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+  .card > .hd { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px 10px; }
+  .card > .hd h3 { margin: 0; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+  .card > .bd { padding: 0 18px 18px; }
+  .card > .bd.pt { padding-top: 16px; }
+  h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -.01em; }
+  .sub { color: var(--muted); font-size: 13px; margin: 0 0 20px; max-width: 70ch; }
+  .eyebrow { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--faint); font-weight: 600; margin: 0 0 10px; }
+  /* Grid and flex items default to min-width:auto, so a wide child refuses to
+     shrink and pushes the whole page into horizontal overflow. minmax(0,1fr)
+     plus min-width:0 lets content wrap instead of spilling. */
+  .grid { display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr); }
+  .grid > * { min-width: 0; }
+  .card, .kpi, .split > * { min-width: 0; }
+  .rlabels > div { min-width: 0; }
+  .g2 { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .g3 { grid-template-columns: repeat(3, minmax(0,1fr)); }
+  .g4 { grid-template-columns: repeat(4, minmax(0,1fr)); }
+  @media (max-width: 900px) { .g4 { grid-template-columns: repeat(2, minmax(0,1fr)); } .g3, .g2 { grid-template-columns: 1fr; } }
+  @media (max-width: 560px) { .g4 { grid-template-columns: repeat(2, minmax(0,1fr)); } }
+
+  .kpi .lbl { font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); display: flex; align-items: center; gap: 5px; flex-wrap: wrap; min-width: 0; }
+  .kpi .val { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 23px; font-weight: 600; margin-top: 5px; line-height: 1.2; overflow-wrap: normal; word-break: keep-all; }
+  @media (max-width: 640px) { .kpi .val { font-size: 17px; } }
+  .kpi .val.na { color: var(--faint); }
+  .kpi .sec { font-family: var(--mono); font-size: 13px; margin-top: 2px; color: var(--muted); }
+  .kpi .why { font-size: 11px; color: var(--faint); margin-top: 4px; line-height: 1.4; }
+  .pos { color: var(--pos); } .neg { color: var(--neg); } .warnc { color: var(--warn); } .infoc { color: var(--info); }
+  .mutedc { color: var(--muted); } .faintc { color: var(--faint); }
+
+  .badge { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 500; border: 1px solid var(--border-strong); background: var(--raised); color: var(--muted); white-space: nowrap; }
+  .badge.pos { border-color: rgba(46,189,133,.3); background: rgba(46,189,133,.1); color: var(--pos); }
+  .badge.neg { border-color: rgba(240,97,109,.3); background: rgba(240,97,109,.1); color: var(--neg); }
+  .badge.warn { border-color: rgba(240,185,11,.3); background: rgba(240,185,11,.1); color: var(--warn); }
+  .badge.info { border-color: rgba(76,141,255,.3); background: rgba(76,141,255,.1); color: var(--info); }
+  .badge.ghost { background: transparent; border-color: var(--border); color: var(--faint); }
+  .dot { width: 6px; height: 6px; border-radius: 999px; display: inline-block; }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+  .pulse { animation: pulse 2s ease-in-out infinite; }
+
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; height: 36px; padding: 0 15px; border-radius: 9px; border: 1px solid var(--border-strong); background: var(--raised); color: var(--fg); font-size: 13px; font-weight: 500; cursor: pointer; }
+  .btn:hover { background: #1a2133; }
+  .btn.primary { background: var(--info); border-color: var(--info); color: #fff; }
+  .btn.primary:hover { filter: brightness(1.08); }
+  .btn.sm { height: 30px; padding: 0 11px; font-size: 12px; }
+  .btn.ghost { background: transparent; border-color: transparent; color: var(--muted); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+
+  input, select {
+    height: 36px; width: 100%; padding: 0 11px; border-radius: 9px;
+    border: 1px solid var(--border); background: var(--void); color: var(--fg);
+    font-size: 13px; font-family: var(--sans);
+  }
+  input.mono { font-family: var(--mono); }
+  input:focus, select:focus { outline: none; border-color: var(--info); }
+  input.bad { border-color: rgba(240,97,109,.55); }
+  input.good { border-color: rgba(46,189,133,.45); }
+  label.fl { display: block; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th { text-align: left; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); font-weight: 500; padding: 0 0 8px; border-bottom: 1px solid var(--border); }
+  td { padding: 9px 0; border-bottom: 1px solid rgba(30,38,55,.6); }
+  tr:last-child td { border-bottom: 0; }
+  th.r, td.r { text-align: right; }
+  .scroll { overflow-x: auto; }
+
+  dl.rows { margin: 0; }
+  dl.rows > div { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 7px 0; border-bottom: 1px solid rgba(30,38,55,.6); }
+  dl.rows > div:last-child { border-bottom: 0; }
+  dl.rows dt { color: var(--muted); font-size: 13px; }
+  dl.rows dd { margin: 0; font-family: var(--mono); font-size: 13px; }
+
+  .note { border-radius: 11px; padding: 10px 13px; font-size: 12px; line-height: 1.5; }
+  .note.warn { border: 1px solid rgba(240,185,11,.25); background: rgba(240,185,11,.06); color: var(--warn); }
+  .note.neg { border: 1px solid rgba(240,97,109,.25); background: rgba(240,97,109,.06); color: var(--neg); }
+  .note.pos { border: 1px solid rgba(46,189,133,.22); background: rgba(46,189,133,.05); color: var(--pos); }
+  .note.info { border: 1px solid rgba(76,141,255,.25); background: rgba(76,141,255,.06); color: var(--info); }
+  .note.plain { border: 1px dashed var(--border); background: transparent; color: var(--muted); }
+
+  pre.code { margin: 0; overflow-x: auto; border: 1px solid var(--border); background: var(--void); border-radius: 11px; padding: 12px 15px; font-family: var(--mono); font-size: 12px; line-height: 1.65; color: var(--muted); }
+
+  .empty { border: 1px dashed var(--border); border-radius: var(--radius); padding: 42px 22px; text-align: center; }
+  .empty p { margin: 0 0 6px; }
+
+  /* ---- range bar ---- */
+  .range { padding: 6px 0 0; }
+  .rtrack { position: relative; height: 42px; }
+  .rbar { position: absolute; top: 50%; left: 0; right: 0; height: 6px; transform: translateY(-50%); border-radius: 999px; background: var(--raised); overflow: hidden; }
+  .rfill { position: absolute; top: 0; bottom: 0; border-radius: 999px; opacity: .32; }
+  .redge { position: absolute; top: 50%; width: 2px; height: 20px; transform: translateY(-50%); background: var(--border-strong); border-radius: 2px; }
+  .rmark { position: absolute; top: 50%; width: 3px; height: 32px; transform: translate(-50%,-50%); border-radius: 3px; }
+  .rlabels { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 11.5px; }
+  .rlabels .cap { font-family: var(--sans); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); margin-top: 3px; }
+
+  .bar { height: 8px; border-radius: 999px; background: var(--raised); overflow: hidden; }
+  .bar i { display: block; height: 100%; border-radius: 999px; }
+
+  .waterfall > div { display: flex; justify-content: space-between; gap: 16px; padding: 6px 0; font-family: var(--mono); font-size: 13px; }
+  .waterfall .rule { border-top: 1px solid var(--border-strong); margin-top: 4px; padding-top: 8px; }
+
+  .split { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .hide-sm { }
+  @media (max-width: 640px) { .hide-sm { display: none !important; } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+"use strict";
+/* =========================================================================
+   0. CONSTANTS
+   ========================================================================= */
+const CHAIN = {
+  id: 8453,
+  key: "base",
+  name: "Base Mainnet",
+  nativeSymbol: "ETH",
+  nativeDecimals: 18,
+  explorer: "https://basescan.org",
+  defaultRpc: "https://mainnet.base.org",
+  multicall3: "0xcA11bde05977b3631167028862bE2a173976CA11",
+  uniswapV3: {
+    factory: "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
+    positionManager: "0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1",
+    quoter: "0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a"
+  }
+};
+
+// Function selectors, computed from their signatures rather than remembered.
+const SEL = {
+  balanceOf: "0x70a08231",
+  tokenOfOwnerByIndex: "0x2f745c59",
+  ownerOf: "0x6352211e",
+  positions: "0x99fbab88",
+  getPool: "0x1698ee82",
+  slot0: "0x3850c7bd",
+  liquidity: "0x1a686502",
+  feeGrowthGlobal0X128: "0xf3058399",
+  feeGrowthGlobal1X128: "0x46141319",
+  ticks: "0xf30dba93",
+  symbol: "0x95d89b41",
+  name: "0x06fdde03",
+  decimals: "0x313ce567",
+  aggregate3: "0x82ad56cb",
+  getEthBalance: "0x4d2301cc"
+};
+
+const TOPIC = {
+  increaseLiquidity: "0x3067048beee31b25b2f1681f88dac838c8bba36af25bfb2b7cf7473a5847e35f",
+  decreaseLiquidity: "0x26f6a048ee9138f2c0ce266f322cb99228e8d619ae2bff30c67f8dcf9d2377b4",
+  collect: "0x40d0efd1a53d60ecbf40971b9daf7dc90178c3aadc7aab1765632738fa8b8f01"
+};
+
+/*
+  Asset registry. `decimals` here is a LABELLING HINT ONLY — every decimals used
+  in arithmetic is read from the token contract. A wrong hard-coded value would
+  scale every downstream amount by a power of ten.
+
+  `proxy: true` means the USD mark comes from a DIFFERENT asset's market.
+  cbBTC is not BTC. The flag follows the value all the way to the screen.
+*/
+const TOKENS = {
+  "0x4200000000000000000000000000000000000006": { symbol: "WETH", decimals: 18, stable: false, binance: "ETHUSDT", proxy: true },
+  "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": { symbol: "USDC", decimals: 6, stable: true, binance: "USDCUSDT", proxy: false },
+  "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca": { symbol: "USDbC", decimals: 6, stable: true, binance: null, proxy: false },
+  "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf": { symbol: "cbBTC", decimals: 8, stable: false, binance: "BTCUSDT", proxy: true },
+  "0x2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22": { symbol: "cbETH", decimals: 18, stable: false, binance: null, proxy: true },
+  "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2": { symbol: "USDT", decimals: 6, stable: true, binance: null, proxy: false }
+};
+
+const FEE_LABEL = { 100: "0.01%", 500: "0.05%", 3000: "0.30%", 10000: "1.00%" };
+
+const DEFAULT_THRESHOLDS = {
+  safeEdgePct: 20,
+  nearEdgePct: 15,
+  criticalEdgePct: 5,
+  minPositionSize: 500,
+  estRebalanceCost: 4
+};
+
+/* =========================================================================
+   1. NUMERIC PRIMITIVES
+   All chain values are bigint. Nothing here goes through a JS float: a double
+   loses precision above 2^53, and a uint256 balance is routinely larger.
+   ========================================================================= */
+const Q96 = 2n ** 96n;
+const Q128 = 2n ** 128n;
+const MAX_U256 = (1n << 256n) - 1n;
+const WAD = 10n ** 18n;               // fixed-point scale for prices and values
+const MIN_TICK = -887272, MAX_TICK = 887272;
+
+/** uint256 subtraction that wraps like Solidity. See §4 note. */
+const subU256 = (a, b) => (a - b) & MAX_U256;
+
+function pow10(n) { return 10n ** BigInt(n); }
+
+/** Raw base units -> WAD-scaled human units, exactly. */
+function toWad(raw, decimals) {
+  return decimals <= 18
+    ? raw * pow10(18 - decimals)
+    : raw / pow10(decimals - 18);
+}
+
+/** Format a WAD-scaled bigint for display. Never uses Number for the digits. */
+function fmtWad(v, maxFrac = 2, opts = {}) {
+  if (v === null || v === undefined) return "N/A";
+  let neg = v < 0n;
+  let x = neg ? -v : v;
+  const int = x / WAD;
+  let frac = (x % WAD).toString().padStart(18, "0").slice(0, maxFrac);
+  frac = frac.replace(/0+$/, "");
+  if (opts.minFrac) frac = frac.padEnd(opts.minFrac, "0");
+  const s = group(int.toString()) + (frac ? "." + frac : "");
+  const sign = neg ? "-" : (opts.signed && v !== 0n ? "+" : "");
+  return sign + s;
+}
+
+function group(s) { return s.replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
+
+/** Raw amount -> display string, precision scaled to magnitude. */
+function fmtAmount(raw, decimals) {
+  if (raw === null || raw === undefined) return "N/A";
+  const w = toWad(raw, decimals);
+  const abs = w < 0n ? -w : w;
+  let frac;
+  if (abs === 0n) frac = 2;
+  else if (abs >= 1000n * WAD) frac = 2;
+  else if (abs >= WAD) frac = 4;
+  else if (abs >= WAD / 10000n) frac = 6;
+  else frac = 8;
+  return fmtWad(w, frac);
+}
+
+/** Money in the unit of account. `unit` is a symbol, not an assumed dollar. */
+function fmtMoney(wad, unit, opts = {}) {
+  if (wad === null || wad === undefined) return "N/A";
+  const abs = wad < 0n ? -wad : wad;
+  const frac = abs >= 1000n * WAD ? 2 : abs >= WAD ? 2 : abs === 0n ? 2 : 4;
+  const body = fmtWad(wad, frac, { signed: opts.signed, minFrac: 2 });
+  return unit === "USD" ? body.replace(/^([+-]?)/, "$1$") : body + " " + unit;
+}
+
+function fmtPct(wad, opts = {}) {
+  if (wad === null || wad === undefined) return "N/A";
+  return fmtWad(wad, opts.frac ?? 2, { signed: opts.signed, minFrac: 2 }) + "%";
+}
+
+function pctWad(numer, denom) {
+  if (denom === 0n) return null;
+  return (numer * 100n * WAD) / denom;
+}
+
+function truncHex(s, lead = 6, tail = 4) {
+  if (!s || s.length <= lead + tail + 1) return s || "";
+  return s.slice(0, lead) + "…" + s.slice(-tail);
+}
+
+function toneOf(v) { return v === null || v === undefined ? "" : v > 0n ? "pos" : v < 0n ? "neg" : ""; }
+
+/* =========================================================================
+   2. UNISWAP V3 MATH
+   Ported from TickMath / LiquidityAmounts. Validated against the three
+   canonical vectors: tick 0 -> 2^96 exactly, and both tick extremes.
+   ========================================================================= */
+const TICK_MULTIPLIERS = [
+  [0x2n, 0xfff97272373d413259a46990580e213an],
+  [0x4n, 0xfff2e50f5f656932ef12357cf3c7fdccn],
+  [0x8n, 0xffe5caca7e10e4e61c3624eaa0941cd0n],
+  [0x10n, 0xffcb9843d60f6159c9db58835c926644n],
+  [0x20n, 0xff973b41fa98c081472e6896dfb254c0n],
+  [0x40n, 0xff2ea16466c96a3843ec78b326b52861n],
+  [0x80n, 0xfe5dee046a99a2a811c461f1969c3053n],
+  [0x100n, 0xfcbe86c7900a88aedcffc83b479aa3a4n],
+  [0x200n, 0xf987a7253ac413176f2b074cf7815e54n],
+  [0x400n, 0xf3392b0822b70005940c7a398e4b70f3n],
+  [0x800n, 0xe7159475a2c29b7443b29c7fa6e889d9n],
+  [0x1000n, 0xd097f3bdfd2022b8845ad8f792aa5825n],
+  [0x2000n, 0xa9f746462d870fdf8a65dc1f90e061e5n],
+  [0x4000n, 0x70d869a156d2a1b890bb3df62baf32f7n],
+  [0x8000n, 0x31be135f97d08fd981231505542fcfa6n],
+  [0x10000n, 0x9aa508b5b7a84e1c677de54f3e99bc9n],
+  [0x20000n, 0x5d6af8dedb81196699c329225ee604n],
+  [0x40000n, 0x2216e584f5fa1ea926041bedfe98n],
+  [0x80000n, 0x48a170391f7dc42444e8fa2n]
+];
+
+function sqrtRatioAtTick(tick) {
+  if (tick < MIN_TICK || tick > MAX_TICK) throw new Error("tick out of range: " + tick);
+  const abs = BigInt(tick < 0 ? -tick : tick);
+  let r = (abs & 0x1n) !== 0n
+    ? 0xfffcb933bd6fad37aa2d162d1a594001n
+    : 0x100000000000000000000000000000000n;
+  for (const [bit, mul] of TICK_MULTIPLIERS) if ((abs & bit) !== 0n) r = (r * mul) >> 128n;
+  if (tick > 0) r = MAX_U256 / r;
+  return (r >> 32n) + ((r % (1n << 32n)) === 0n ? 0n : 1n);
+}
+
+/**
+ * Price of token1 in token0, WAD-scaled, adjusted for decimals.
+ * price = (sqrtP / 2^96)^2 * 10^(d0 - d1)
+ */
+function priceFromSqrt(sqrtPriceX96, d0, d1) {
+  const numerator = sqrtPriceX96 * sqrtPriceX96 * WAD * pow10(d0);
+  return numerator / (Q96 * Q96 * pow10(d1));
+}
+
+/** Reciprocal of a WAD-scaled price. */
+function invWad(p) { return p === 0n ? 0n : (WAD * WAD) / p; }
+
+/**
+ * Token amounts held by `liquidity` across [tickLower, tickUpper] at sqrtP.
+ * Three cases, exactly as LiquidityAmounts.sol:
+ *   below range  -> entirely token0 (you were bought into the volatile asset)
+ *   in range     -> both
+ *   above range  -> entirely token1
+ */
+function amountsForLiquidity(sqrtP, sqrtA, sqrtB, L) {
+  if (sqrtA > sqrtB) { const t = sqrtA; sqrtA = sqrtB; sqrtB = t; }
+  if (L === 0n) return { amount0: 0n, amount1: 0n };
+  if (sqrtP <= sqrtA) {
+    return { amount0: (L * Q96 * (sqrtB - sqrtA)) / (sqrtB * sqrtA), amount1: 0n };
+  }
+  if (sqrtP < sqrtB) {
+    return {
+      amount0: (L * Q96 * (sqrtB - sqrtP)) / (sqrtB * sqrtP),
+      amount1: (L * (sqrtP - sqrtA)) / Q96
+    };
+  }
+  return { amount0: 0n, amount1: (L * (sqrtB - sqrtA)) / Q96 };
+}
+
+/**
+ * feeGrowthInside for one token.
+ *
+ * CRITICAL: these accumulators are uint256 values that intentionally underflow.
+ * Solidity wraps on subtraction; JavaScript bigint does not. Every subtraction
+ * is masked back into uint256 — omitting the mask yields negative fee growth
+ * and wildly wrong fee numbers, and is the most common bug in LP trackers.
+ */
+function feeGrowthInside(global, lowerOutside, upperOutside, tickCurrent, tickLower, tickUpper) {
+  const below = tickCurrent >= tickLower ? lowerOutside : subU256(global, lowerOutside);
+  const above = tickCurrent < tickUpper ? upperOutside : subU256(global, upperOutside);
+  return subU256(subU256(global, below), above);
+}
+
+function uncollectedFees(liquidity, inside, insideLast, tokensOwed) {
+  return tokensOwed + (liquidity * subU256(inside, insideLast)) / Q128;
+}
+
+/* =========================================================================
+   3. ENGINES — pure functions over normalised position state
+   ========================================================================= */
+
+/**
+ * Range geometry.
+ *
+ * The MATHS is done in tick space — ticks are linear in log-price, so "percent
+ * through the range" behaves correctly at both edges. The PRESENTATION is in
+ * price space, and those two disagree whenever the quote asset is token0:
+ * for USDC/cbBTC, a rising tick means a FALLING price in USDC per cbBTC. So the
+ * displayed progress and the edge labels are mirrored for those pairs. Without
+ * this, the marker slides the wrong way and "near lower" means near the upper
+ * price — a confidently wrong readout.
+ */
+function rangeEngine(p, thresholds) {
+  const span = p.tickUpper - p.tickLower;
+  const tickProgress = span === 0 ? 0 : ((p.currentTick - p.tickLower) / span) * 100;
+  const inRange = p.currentTick >= p.tickLower && p.currentTick < p.tickUpper;
+
+  const flip = Boolean(p.quoteIsToken0);
+  const progressPct = flip ? 100 - tickProgress : tickProgress;
+  const distLowerPct = progressPct;
+  const distUpperPct = 100 - progressPct;
+  const nearestEdgePct = Math.min(distLowerPct, distUpperPct);
+
+  let state;
+  if (p.currentTick < p.tickLower) state = flip ? "OUT_ABOVE" : "OUT_BELOW";
+  else if (p.currentTick >= p.tickUpper) state = flip ? "OUT_BELOW" : "OUT_ABOVE";
+  else if (nearestEdgePct > thresholds.safeEdgePct) state = "IN_RANGE_SAFE";
+  else state = distLowerPct < distUpperPct ? "NEAR_LOWER" : "NEAR_UPPER";
+
+  return {
+    state,
+    progressPct,
+    distLowerPct,
+    distUpperPct,
+    nearestEdgePct,
+    widthPct: p.priceLower > 0n
+      ? Number(((p.priceUpper - p.priceLower) * 10000n) / p.priceLower) / 100
+      : null,
+    inRange
+  };
+}
+
+const RANGE_META = {
+  IN_RANGE_SAFE: { label: "In range", cls: "pos" },
+  NEAR_LOWER: { label: "Near lower", cls: "warn" },
+  NEAR_UPPER: { label: "Near upper", cls: "warn" },
+  OUT_BELOW: { label: "Out below", cls: "neg" },
+  OUT_ABOVE: { label: "Out above", cls: "neg" }
+};
+
+/**
+ * HODL benchmark and divergence.
+ *
+ * Only ENTRY QUANTITIES are needed — not entry prices — because the
+ * counterfactual is "those same tokens, valued today". Entry prices are needed
+ * only for initial capital, which this file does not claim to know.
+ */
+function hodlEngine(p) {
+  if (!p.entry) return null;
+  const hodl = valueOf(p, p.entry.amount0, p.entry.amount1);
+  const lpExFees = valueOf(p, p.amount0, p.amount1);
+  const uncollected = valueOf(p, p.uncollected0, p.uncollected1);
+  const collected = p.collected
+    ? valueOf(p, p.collected.amount0, p.collected.amount1)
+    : 0n;
+  const lpWithFees = lpExFees + uncollected + collected;
+  return {
+    hodlValue: hodl,
+    lpExFees,
+    uncollectedValue: uncollected,
+    collectedValue: collected,
+    totalFees: uncollected + collected,
+    lpWithFees,
+    divergenceExFees: lpExFees - hodl,
+    lpVsHodl: lpWithFees - hodl,
+    lpVsHodlPct: pctWad(lpWithFees - hodl, hodl),
+    collectedKnown: Boolean(p.collected)
+  };
+}
+
+/** Value a (amount0, amount1) pair in the position's unit of account. */
+function valueOf(p, a0, a1) {
+  const v0 = toWad(a0, p.token0.decimals);
+  const v1 = toWad(a1, p.token1.decimals);
+  // p.quoteIsToken0: price is token0 per token1 (quote per base).
+  return p.quoteIsToken0
+    ? v0 + (v1 * p.priceQuotePerBase) / WAD
+    : v1 + (v0 * p.priceQuotePerBase) / WAD;
+}
+
+/**
+ * Rebalance recommendation. Edge distance is only the starting point; it is
+ * then weighed against what acting would cost. Recommending a rebalance that
+ * costs more than it can earn is worse than saying nothing.
+ */
+function rebalanceEngine(p, range, hodl, thresholds) {
+  const reasons = [];
+  let signal, confidence = "medium";
+
+  if (!range.inRange) {
+    signal = "REBALANCE_REVIEW";
+    reasons.push({ metric: "Range", value: RANGE_META[range.state].label + " — earning no fees", effect: "supports" });
+  } else if (range.nearestEdgePct <= thresholds.criticalEdgePct) {
+    signal = "REBALANCE_SOON";
+    reasons.push({ metric: "Distance to edge", value: range.nearestEdgePct.toFixed(1) + "% of range", effect: "supports" });
+  } else if (range.nearestEdgePct <= thresholds.nearEdgePct) {
+    signal = "WATCH";
+    reasons.push({ metric: "Distance to edge", value: range.nearestEdgePct.toFixed(1) + "% of range", effect: "supports" });
+  } else {
+    signal = "HOLD";
+    reasons.push({ metric: "Distance to edge", value: range.nearestEdgePct.toFixed(1) + "% of range", effect: "opposes" });
+  }
+
+  const value = valueOf(p, p.amount0, p.amount1);
+  const valueNum = Number(value / WAD);
+  const cost = thresholds.estRebalanceCost;
+
+  if (valueNum > 0 && valueNum < thresholds.minPositionSize) {
+    reasons.push({
+      metric: "Position size",
+      value: fmtMoney(value, p.unit) + " — gas dominates any yield gain",
+      effect: "opposes"
+    });
+    if (signal === "REBALANCE_SOON" || signal === "REBALANCE_REVIEW") {
+      signal = "EXIT_REVIEW";
+      confidence = "medium";
+    }
+  }
+
+  if (hodl) {
+    const feePct = pctWad(hodl.totalFees, value);
+    if (feePct !== null) {
+      reasons.push({
+        metric: "Fees earned to date",
+        value: fmtMoney(hodl.totalFees, p.unit) + " (" + fmtPct(feePct) + " of position)",
+        effect: hodl.totalFees > 0n ? "opposes" : "supports"
+      });
+    }
+    const costWad = BigInt(Math.round(cost * 1e6)) * (WAD / 1000000n);
+    if (hodl.totalFees > 0n && costWad > hodl.totalFees) {
+      reasons.push({
+        metric: "Estimated cost vs fees",
+        value: "~" + fmtMoney(costWad, p.unit) + " to act, more than the " + fmtMoney(hodl.totalFees, p.unit) + " earned so far",
+        effect: "opposes"
+      });
+      if (signal === "REBALANCE_SOON") { signal = "WATCH"; confidence = "low"; }
+    }
+    if (hodl.lpVsHodl < 0n && !range.inRange) {
+      reasons.push({
+        metric: "LP vs HODL",
+        value: fmtMoney(hodl.lpVsHodl, p.unit, { signed: true }) + " — behind simply holding, and out of range",
+        effect: "supports"
+      });
+      signal = "EXIT_REVIEW";
+    }
+  } else {
+    reasons.push({
+      metric: "LP vs HODL",
+      value: "Unknown — no entry basis recorded",
+      effect: "opposes"
+    });
+    confidence = "low";
+  }
+
+  return { signal, confidence, reasons, estimatedCost: cost };
+}
+
+const SIGNAL_META = {
+  HOLD: { label: "HOLD", cls: "pos", blurb: "In range with room to the nearest edge. Nothing to do." },
+  WATCH: { label: "WATCH", cls: "warn", blurb: "Approaching an edge. Worth watching, not worth acting on yet." },
+  REBALANCE_SOON: { label: "REBALANCE SOON", cls: "warn", blurb: "Close to an edge and likely to exit the range." },
+  REBALANCE_REVIEW: { label: "REBALANCE REVIEW", cls: "neg", blurb: "Out of range and earning nothing. Review whether to re-centre." },
+  EXIT_REVIEW: { label: "EXIT REVIEW", cls: "neg", blurb: "The cost of acting is hard to justify at this size or performance. Consider whether this pair should be LP'd at all." }
+};
+
+/* =========================================================================
+   4. ABI ENCODE / DECODE
+   Hand-rolled because this file has no dependencies. Only view calls exist.
+   ========================================================================= */
+const strip0x = (h) => (h.startsWith("0x") ? h.slice(2) : h);
+const padLeft = (h) => strip0x(h).padStart(64, "0");
+const padRight = (h) => { const s = strip0x(h); return s.padEnd(Math.ceil(s.length / 64) * 64, "0"); };
+
+function encAddress(a) { return padLeft(a.toLowerCase()); }
+function encUint(v) { return padLeft(BigInt(v).toString(16)); }
+function encInt(v) {
+  let n = BigInt(v);
+  if (n < 0n) n = (1n << 256n) + n;
+  return padLeft(n.toString(16));
+}
+
+function word(data, i) { return data.slice(i * 64, (i + 1) * 64); }
+function decUint(data, i) { return BigInt("0x" + (word(data, i) || "0")); }
+function decInt(data, i) {
+  const v = decUint(data, i);
+  return v >= 1n << 255n ? v - (1n << 256n) : v;
+}
+function decInt24(data, i) {
+  const v = decUint(data, i);
+  return Number(v >= 1n << 255n ? v - (1n << 256n) : v);
+}
+function decAddress(data, i) { return "0x" + word(data, i).slice(24); }
+function decBool(data, i) { return decUint(data, i) !== 0n; }
+
+function decString(data, offsetWordIndex) {
+  const off = Number(decUint(data, offsetWordIndex)) * 2;
+  const len = Number(BigInt("0x" + data.slice(off, off + 64)));
+  const hex = data.slice(off + 64, off + 64 + len * 2);
+  let out = "";
+  for (let i = 0; i < hex.length; i += 2) {
+    const c = parseInt(hex.substr(i, 2), 16);
+    if (c) out += String.fromCharCode(c);
+  }
+  return out;
+}
+
+/** bytes at a dynamic offset -> hex string */
+function decBytesAt(data, byteOffset) {
+  const off = byteOffset * 2;
+  const len = Number(BigInt("0x" + data.slice(off, off + 64)));
+  return data.slice(off + 64, off + 64 + len * 2);
+}
+
+/** Encode Multicall3.aggregate3((address,bool,bytes)[]) */
+function encodeAggregate3(calls) {
+  const head = encUint(32);                       // offset to array
+  let body = encUint(calls.length);
+  const tupleOffsets = [];
+  let tupleBlobs = "";
+  let cursor = calls.length * 32;                 // after the offset table
+  for (const c of calls) {
+    tupleOffsets.push(encUint(cursor));
+    const data = strip0x(c.data);
+    const tuple =
+      encAddress(c.target) +
+      encUint(c.allowFailure ? 1 : 0) +
+      encUint(96) +                               // offset to bytes inside tuple
+      encUint(data.length / 2) +
+      padRight(data);
+    tupleBlobs += tuple;
+    cursor += tuple.length / 2;
+  }
+  body += tupleOffsets.join("") + tupleBlobs;
+  return "0x" + strip0x(SEL.aggregate3) + head + body;
+}
+
+/** Decode Multicall3.aggregate3 return -> [{ success, data }] */
+function decodeAggregate3(hex) {
+  const data = strip0x(hex);
+  const arrayOffset = Number(decUint(data, 0)) * 2;
+  const count = Number(BigInt("0x" + data.slice(arrayOffset, arrayOffset + 64)));
+  const base = arrayOffset + 64;
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const tupleOff = Number(BigInt("0x" + data.slice(base + i * 64, base + i * 64 + 64))) * 2;
+    const abs = base + tupleOff;
+    const success = BigInt("0x" + data.slice(abs, abs + 64)) !== 0n;
+    const bytesOff = Number(BigInt("0x" + data.slice(abs + 64, abs + 128)));
+    out.push({ success, data: decBytesAt(data, abs / 2 + bytesOff) });
+  }
+  return out;
+}
+
+/* =========================================================================
+   5. RPC CLIENT
+   ========================================================================= */
+class RpcError extends Error {
+  constructor(code, message) { super(message); this.name = "RpcError"; this.code = code; }
+}
+
+/**
+ * Classify a transport failure into the product's taxonomy. A misconfiguration
+ * and an outage are different problems and must not read the same.
+ */
+function classifyRpc(err) {
+  const m = String((err && err.message) || err || "").toLowerCase();
+  if (m.includes("429") || m.includes("rate limit") || m.includes("too many")) return "RPC_RATE_LIMITED";
+  if (m.includes("timeout") || m.includes("timed out") || m.includes("abort")) return "RPC_TIMEOUT";
+  if (m.includes("cors") || m.includes("failed to fetch") || m.includes("networkerror")) return "RPC_UNREACHABLE";
+  if (m.includes("range") && m.includes("block")) return "LOG_RANGE_REJECTED";
+  return "RPC_ERROR";
+}
+
+let rpcCallCount = 0;
+
+async function rpc(method, params = []) {
+  const url = state.rpcUrl;
+  rpcCallCount++;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20000);
+  let res;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: rpcCallCount, method, params }),
+      signal: controller.signal
+    });
+  } catch (e) {
+    clearTimeout(timer);
+    throw new RpcError(classifyRpc(e), "Could not reach " + url + " — " + (e.message || e) +
+      ". If this is a browser CORS block, the endpoint does not allow direct browser access; try another provider.");
+  }
+  clearTimeout(timer);
+  if (!res.ok) throw new RpcError(classifyRpc(new Error(String(res.status))), "HTTP " + res.status + " from " + url);
+  const body = await res.json();
+  if (body.error) throw new RpcError(classifyRpc(new Error(body.error.message)), body.error.message);
+  return body.result;
+}
+
+const ethCall = (to, data) => rpc("eth_call", [{ to, data }, "latest"]);
+
+/**
+ * Batch reads through Multicall3, so discovering a wallet's positions is a
+ * couple of round trips rather than one per field.
+ * Chunked, because a very large aggregate3 exceeds some providers' call limits.
+ */
+async function multicall(calls, chunkSize = 60) {
+  const out = [];
+  for (let i = 0; i < calls.length; i += chunkSize) {
+    const chunk = calls.slice(i, i + chunkSize);
+    const data = encodeAggregate3(chunk.map((c) => ({ target: c.target, allowFailure: true, data: c.data })));
+    const res = await ethCall(CHAIN.multicall3, data);
+    out.push(...decodeAggregate3(res));
+  }
+  return out;
+}
+
+/* =========================================================================
+   6. LIVE DISCOVERY
+   ========================================================================= */
+function tokenMeta(address) {
+  const hint = TOKENS[address.toLowerCase()];
+  return hint ? { ...hint } : null;
+}
+
+async function readTokens(addresses) {
+  const calls = [];
+  for (const a of addresses) {
+    calls.push({ target: a, data: SEL.symbol });
+    calls.push({ target: a, data: SEL.decimals });
+  }
+  const res = await multicall(calls);
+  const map = new Map();
+  addresses.forEach((a, i) => {
+    const sym = res[i * 2], dec = res[i * 2 + 1];
+    // decimals is load-bearing for every amount. If it cannot be read, the
+    // token is unusable — it is NEVER defaulted to 18.
+    if (!dec || !dec.success || !dec.data) {
+      map.set(a.toLowerCase(), { address: a, error: "decimals() could not be read" });
+      return;
+    }
+    let symbol;
+    try { symbol = sym && sym.success ? decString(sym.data, 0) : truncHex(a); }
+    catch { symbol = truncHex(a); }
+    map.set(a.toLowerCase(), {
+      address: a,
+      symbol: symbol || truncHex(a),
+      decimals: Number(decUint(dec.data, 0))
+    });
+  });
+  return map;
+}
+
+/** Enumerate a wallet's Uniswap V3 position NFTs and read each struct. */
+async function discoverPositions(owner, onProgress) {
+  const npm = CHAIN.uniswapV3.positionManager;
+
+  onProgress("Counting position NFTs…");
+  const balHex = await ethCall(npm, SEL.balanceOf + encAddress(owner));
+  const count = Number(decUint(strip0x(balHex), 0));
+  if (count === 0) return { positions: [], count: 0 };
+
+  onProgress("Reading " + count + " token id" + (count === 1 ? "" : "s") + "…");
+  const idRes = await multicall(
+    Array.from({ length: count }, (_, i) => ({
+      target: npm,
+      data: SEL.tokenOfOwnerByIndex + encAddress(owner) + encUint(i)
+    }))
+  );
+  const tokenIds = idRes.filter((r) => r.success && r.data).map((r) => decUint(r.data, 0));
+
+  onProgress("Reading position structs…");
+  const posRes = await multicall(
+    tokenIds.map((id) => ({ target: npm, data: SEL.positions + encUint(id) }))
+  );
+
+  const raw = [];
+  tokenIds.forEach((id, i) => {
+    const r = posRes[i];
+    if (!r || !r.success || !r.data) return;
+    const d = r.data;
+    raw.push({
+      tokenId: id,
+      token0: decAddress(d, 2),
+      token1: decAddress(d, 3),
+      fee: Number(decUint(d, 4)),
+      tickLower: decInt24(d, 5),
+      tickUpper: decInt24(d, 6),
+      liquidity: decUint(d, 7),
+      feeGrowthInside0Last: decUint(d, 8),
+      feeGrowthInside1Last: decUint(d, 9),
+      tokensOwed0: decUint(d, 10),
+      tokensOwed1: decUint(d, 11)
+    });
+  });
+
+  onProgress("Resolving tokens and pools…");
+  const tokenSet = [...new Set(raw.flatMap((p) => [p.token0, p.token1]))];
+  const tokens = await readTokens(tokenSet);
+
+  const poolRes = await multicall(
+    raw.map((p) => ({
+      target: CHAIN.uniswapV3.factory,
+      data: SEL.getPool + encAddress(p.token0) + encAddress(p.token1) + encUint(p.fee)
+    }))
+  );
+  raw.forEach((p, i) => {
+    p.pool = poolRes[i] && poolRes[i].success ? decAddress(poolRes[i].data, 0) : null;
+  });
+
+  onProgress("Reading pool state and ticks…");
+  const stateCalls = [];
+  for (const p of raw) {
+    if (!p.pool) continue;
+    stateCalls.push({ target: p.pool, data: SEL.slot0 });
+    stateCalls.push({ target: p.pool, data: SEL.feeGrowthGlobal0X128 });
+    stateCalls.push({ target: p.pool, data: SEL.feeGrowthGlobal1X128 });
+    stateCalls.push({ target: p.pool, data: SEL.ticks + encInt(p.tickLower) });
+    stateCalls.push({ target: p.pool, data: SEL.ticks + encInt(p.tickUpper) });
+  }
+  const stateRes = await multicall(stateCalls);
+
+  let k = 0;
+  const positions = [];
+  for (const p of raw) {
+    if (!p.pool) continue;
+    const slot0 = stateRes[k++], fg0 = stateRes[k++], fg1 = stateRes[k++],
+          tl = stateRes[k++], tu = stateRes[k++];
+    if (!slot0 || !slot0.success) continue;
+
+    const t0 = tokens.get(p.token0.toLowerCase());
+    const t1 = tokens.get(p.token1.toLowerCase());
+    if (!t0 || t0.error || !t1 || t1.error) {
+      positions.push({ error: "TOKEN_METADATA_FAILED", tokenId: p.tokenId, detail: (t0 && t0.error) || (t1 && t1.error) });
+      continue;
+    }
+
+    positions.push(buildPosition({
+      tokenId: p.tokenId,
+      pool: p.pool,
+      feeTier: p.fee,
+      tickLower: p.tickLower,
+      tickUpper: p.tickUpper,
+      liquidity: p.liquidity,
+      feeGrowthInside0Last: p.feeGrowthInside0Last,
+      feeGrowthInside1Last: p.feeGrowthInside1Last,
+      tokensOwed0: p.tokensOwed0,
+      tokensOwed1: p.tokensOwed1,
+      sqrtPriceX96: decUint(slot0.data, 0),
+      currentTick: decInt24(slot0.data, 1),
+      feeGrowthGlobal0: fg0 && fg0.success ? decUint(fg0.data, 0) : null,
+      feeGrowthGlobal1: fg1 && fg1.success ? decUint(fg1.data, 0) : null,
+      lowerOutside0: tl && tl.success ? decUint(tl.data, 2) : null,
+      lowerOutside1: tl && tl.success ? decUint(tl.data, 3) : null,
+      upperOutside0: tu && tu.success ? decUint(tu.data, 2) : null,
+      upperOutside1: tu && tu.success ? decUint(tu.data, 3) : null,
+      token0: { address: p.token0, symbol: t0.symbol, decimals: t0.decimals },
+      token1: { address: p.token1, symbol: t1.symbol, decimals: t1.decimals },
+      source: "onchain"
+    }));
+  }
+  return { positions, count };
+}
+
+/**
+ * Normalise raw chain data into the shape every engine consumes, computing
+ * inventory, price orientation, and uncollected fees.
+ */
+function buildPosition(r) {
+  const d0 = r.token0.decimals, d1 = r.token1.decimals;
+  const sqrtA = sqrtRatioAtTick(r.tickLower);
+  const sqrtB = sqrtRatioAtTick(r.tickUpper);
+  const { amount0, amount1 } = amountsForLiquidity(r.sqrtPriceX96, sqrtA, sqrtB, r.liquidity);
+
+  // price token1 per token0, then choose which side reads as the quote.
+  const price1per0 = priceFromSqrt(r.sqrtPriceX96, d0, d1);
+  const hint0 = TOKENS[r.token0.address.toLowerCase()];
+  const hint1 = TOKENS[r.token1.address.toLowerCase()];
+  const quoteIsToken0 = Boolean(hint0 && hint0.stable) && !(hint1 && hint1.stable);
+
+  const priceQuotePerBase = quoteIsToken0 ? invWad(price1per0) : price1per0;
+  const priceAt = (tick) => {
+    const p = priceFromSqrt(sqrtRatioAtTick(tick), d0, d1);
+    return quoteIsToken0 ? invWad(p) : p;
+  };
+  // Inverting flips which bound is "lower" in quote terms.
+  const pLower = quoteIsToken0 ? priceAt(r.tickUpper) : priceAt(r.tickLower);
+  const pUpper = quoteIsToken0 ? priceAt(r.tickLower) : priceAt(r.tickUpper);
+
+  let unc0 = r.tokensOwed0, unc1 = r.tokensOwed1, feesKnown = false;
+  if (r.feeGrowthGlobal0 !== null && r.lowerOutside0 !== null && r.upperOutside0 !== null) {
+    const inside0 = feeGrowthInside(r.feeGrowthGlobal0, r.lowerOutside0, r.upperOutside0, r.currentTick, r.tickLower, r.tickUpper);
+    const inside1 = feeGrowthInside(r.feeGrowthGlobal1, r.lowerOutside1, r.upperOutside1, r.currentTick, r.tickLower, r.tickUpper);
+    unc0 = uncollectedFees(r.liquidity, inside0, r.feeGrowthInside0Last, r.tokensOwed0);
+    unc1 = uncollectedFees(r.liquidity, inside1, r.feeGrowthInside1Last, r.tokensOwed1);
+    feesKnown = true;
+  }
+
+  const base = quoteIsToken0 ? r.token1 : r.token0;
+  const quote = quoteIsToken0 ? r.token0 : r.token1;
+
+  return {
+    ...r,
+    id: r.tokenId.toString(),
+    amount0, amount1,
+    uncollected0: unc0, uncollected1: unc1,
+    feesKnown,
+    price1per0,
+    priceQuotePerBase,
+    priceLower: pLower,
+    priceUpper: pUpper,
+    quoteIsToken0,
+    baseSymbol: base.symbol,
+    quoteSymbol: quote.symbol,
+    unit: quote.symbol,
+    pairLabel: base.symbol + " / " + quote.symbol,
+    entry: null,
+    collected: null,
+    observedAt: Date.now()
+  };
+}
+
+/** Position lifecycle from logs. Many public endpoints cap eth_getLogs range;
+ *  failure here is expected and reported, never silently swallowed. */
+async function fetchHistory(tokenId) {
+  const npm = CHAIN.uniswapV3.positionManager;
+  const topicId = "0x" + encUint(tokenId);
+  const query = (topic0) => rpc("eth_getLogs", [{
+    address: npm, fromBlock: "0x0", toBlock: "latest", topics: [topic0, topicId]
+  }]);
+
+  const [inc, dec, col] = await Promise.all([
+    query(TOPIC.increaseLiquidity), query(TOPIC.decreaseLiquidity), query(TOPIC.collect)
+  ]);
+
+  let e0 = 0n, e1 = 0n, c0 = 0n, c1 = 0n;
+  const events = [];
+  for (const log of inc) {
+    const d = strip0x(log.data);
+    const a0 = decUint(d, 1), a1 = decUint(d, 2);
+    e0 += a0; e1 += a1;
+    events.push({ type: "ADD_LIQUIDITY", block: Number(log.blockNumber), tx: log.transactionHash, amount0: a0, amount1: a1 });
+  }
+  for (const log of dec) {
+    const d = strip0x(log.data);
+    events.push({ type: "REMOVE_LIQUIDITY", block: Number(log.blockNumber), tx: log.transactionHash, amount0: decUint(d, 1), amount1: decUint(d, 2) });
+  }
+  for (const log of col) {
+    const d = strip0x(log.data);
+    const a0 = decUint(d, 1), a1 = decUint(d, 2);
+    c0 += a0; c1 += a1;
+    events.push({ type: "COLLECT_FEES", block: Number(log.blockNumber), tx: log.transactionHash, amount0: a0, amount1: a1 });
+  }
+  events.sort((a, b) => a.block - b.block);
+  if (events.length) events[0].type = "CREATE_POSITION";
+
+  // A Collect returns principal as well as fees when it follows a decrease, so
+  // collected-fee totals from logs alone are an upper bound. Flagged, not hidden.
+  return {
+    entry: { amount0: e0, amount1: e1, source: "chain-logs" },
+    collected: { amount0: c0, amount1: c1, source: "chain-logs", approximate: dec.length > 0 },
+    events
+  };
+}
+
+/* =========================================================================
+   7. DEMO FIXTURES
+   Only the INPUTS are fixtures. Every displayed figure is computed by the same
+   engine LIVE uses — so a bug in the maths shows up in demo mode too.
+   ========================================================================= */
+function buildDemoPositions() {
+  const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+  const CBBTC = "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf";
+  const WETH = "0x4200000000000000000000000000000000000006";
+
+  // Derive fee-growth inputs from the fee amounts we want, so the engine still
+  // does the real feeGrowthInside arithmetic rather than reading a number off.
+  // The global accumulator is scaled to sit above the delta: a real
+  // feeGrowthInsideLast is never negative, and a fixture that only works
+  // because the uint256 mask rescues it is not testing the mask honestly.
+  const growth = (target, L) => {
+    const delta = (target * Q128) / L;
+    const global = delta * 3n + 10n ** 30n;
+    return { global, last: global - delta };
+  };
+
+  // --- cbBTC / USDC, 0.30%, in range -------------------------------------
+  const L1 = 61800000n;
+  const g1a = growth(1_420_000n, L1);   // 1.42 USDC uncollected
+  const g1b = growth(750n, L1);         // 0.0000075 cbBTC uncollected
+  const p1 = buildPosition({
+    tokenId: 1348792n,
+    pool: "0x0000000000000000000000000000000000000001",
+    feeTier: 3000,
+    tickLower: -67680, tickUpper: -65400,
+    liquidity: L1,
+    feeGrowthInside0Last: g1a.last,
+    feeGrowthInside1Last: g1b.last,
+    tokensOwed0: 0n, tokensOwed1: 0n,
+    sqrtPriceX96: sqrtRatioAtTick(-66480),
+    currentTick: -66480,
+    feeGrowthGlobal0: g1a.global, feeGrowthGlobal1: g1b.global,
+    lowerOutside0: 0n, lowerOutside1: 0n, upperOutside0: 0n, upperOutside1: 0n,
+    token0: { address: USDC, symbol: "USDC", decimals: 6 },
+    token1: { address: CBBTC, symbol: "cbBTC", decimals: 8 },
+    source: "fixture"
+  });
+  p1.entry = { amount0: 95_060_000n, amount1: 137_000n, source: "fixture" };
+  p1.collected = { amount0: 5_380_000n, amount1: 1_000n, source: "fixture" };
+  p1.openedAt = Date.now() - 46 * 86400000;
+
+  // --- WETH / USDC, 0.05%, drifted out below ------------------------------
+  const L2 = 70976200000000n;
+  const g2a = growth(3_100_000n, L2);
+  const g2b = growth(1_100_000_000_000_000n, L2);
+  const p2 = buildPosition({
+    tokenId: 1352001n,
+    pool: "0x0000000000000000000000000000000000000002",
+    feeTier: 500,
+    tickLower: 193890, tickUpper: 196260,
+    liquidity: L2,
+    feeGrowthInside0Last: g2a.last,
+    feeGrowthInside1Last: g2b.last,
+    tokensOwed0: 0n, tokensOwed1: 0n,
+    sqrtPriceX96: sqrtRatioAtTick(196600),
+    currentTick: 196600,
+    feeGrowthGlobal0: g2a.global, feeGrowthGlobal1: g2b.global,
+    // Above the range: inside = upperOutside - lowerOutside, so the upper tick
+    // carries the accumulated growth. This exercises the branch an in-range
+    // position never reaches.
+    lowerOutside0: 0n, lowerOutside1: 0n,
+    upperOutside0: g2a.global, upperOutside1: g2b.global,
+    token0: { address: USDC, symbol: "USDC", decimals: 6 },
+    token1: { address: WETH, symbol: "WETH", decimals: 18 },
+    source: "fixture"
+  });
+  p2.entry = { amount0: 235_000_000n, amount1: 68_000_000_000_000_000n, source: "fixture" };
+  p2.collected = { amount0: 8_900_000n, amount1: 0n, source: "fixture" };
+  p2.openedAt = Date.now() - 92 * 86400000;
+
+  return [p1, p2];
+}
+
+const DEMO_BALANCES = [
+  { symbol: "ETH", decimals: 18, raw: 21_500_000_000_000_000n, native: true },
+  { symbol: "USDC", decimals: 6, raw: 412_330_000n, native: false },
+  { symbol: "cbBTC", decimals: 8, raw: 137_000n, native: false },
+  { symbol: "WETH", decimals: 18, raw: 250_000_000_000_000_000n, native: false }
+];
+
+/* =========================================================================
+   8. STATE
+   ========================================================================= */
+const LS = {
+  read(key, fallback) {
+    try { const v = localStorage.getItem("lpcc:" + key); return v ? JSON.parse(v) : fallback; }
+    catch { return fallback; }
+  },
+  write(key, value) {
+    try { localStorage.setItem("lpcc:" + key, JSON.stringify(value)); } catch { /* private mode */ }
+  }
+};
+
+const state = {
+  route: "overview",
+  mode: LS.read("mode", "demo"),
+  rpcUrl: LS.read("rpcUrl", CHAIN.defaultRpc),
+  address: LS.read("address", ""),
+  thresholds: { ...DEFAULT_THRESHOLDS, ...LS.read("thresholds", {}) },
+  positions: [],
+  balances: [],
+  chain: { reachable: null, block: null, latencyMs: null, error: null, checkedAt: null },
+  balanceFailures: [],
+  scanning: false,
+  scanStatus: "",
+  scanError: null,
+  historyError: null,
+  addressError: null,
+  sim: { capital: 1000, rangePct: 10, movePct: 0, feeTier: 3000, days: 90, volume: 2000000 }
+};
+
+function persist() {
+  LS.write("mode", state.mode);
+  LS.write("rpcUrl", state.rpcUrl);
+  LS.write("address", state.address);
+  LS.write("thresholds", state.thresholds);
+}
+
+/** Manually-entered entry bases, per token id. Explicitly user-supplied. */
+function entryOverrides() { return LS.read("entries", {}); }
+function saveEntryOverride(id, amount0, amount1) {
+  const all = entryOverrides();
+  all[id] = { amount0: amount0.toString(), amount1: amount1.toString() };
+  LS.write("entries", all);
+}
+
+function activePositions() {
+  return state.mode === "demo" ? DEMO_POSITIONS : state.positions.filter((p) => !p.error);
+}
+function activeBalances() {
+  return state.mode === "demo" ? DEMO_BALANCES : state.balances;
+}
+
+/** Portfolio roll-up. Positions in different quote units are NOT summed —
+ *  adding USDC to WETH would be arithmetic on incompatible things. */
+function portfolio() {
+  const list = activePositions();
+  if (!list.length) return null;
+  const units = new Set(list.map((p) => p.unit));
+  const mixed = units.size > 1;
+
+  let value = 0n, fees = 0n, hodl = 0n, lpVsHodl = 0n, divergence = 0n;
+  let inRangeValue = 0n, outCount = 0, hodlKnown = true;
+
+  for (const p of list) {
+    const r = rangeEngine(p, state.thresholds);
+    const v = valueOf(p, p.amount0, p.amount1);
+    value += v;
+    if (r.inRange) inRangeValue += v; else outCount++;
+    fees += valueOf(p, p.uncollected0, p.uncollected1);
+    if (p.collected) fees += valueOf(p, p.collected.amount0, p.collected.amount1);
+    const h = hodlEngine(p);
+    if (h) { hodl += h.hodlValue; lpVsHodl += h.lpVsHodl; divergence += h.divergenceExFees; }
+    else hodlKnown = false;
+  }
+
+  return {
+    mixed,
+    unit: mixed ? null : list[0].unit,
+    value, fees, hodl, lpVsHodl, divergence, hodlKnown,
+    lpVsHodlPct: hodlKnown && hodl > 0n ? pctWad(lpVsHodl, hodl) : null,
+    capitalInRangePct: value > 0n ? pctWad(inRangeValue, value) : null,
+    outCount,
+    count: list.length
+  };
+}
+
+/* =========================================================================
+   9. LIVE ACTIONS
+   ========================================================================= */
+function validateAddress(input) {
+  const v = (input || "").trim();
+  if (!v) return { ok: false, message: "Enter a public EVM address." };
+  if (v.includes(".")) return { ok: false, message: "ENS names are not supported here. Paste the 0x… address." };
+  if (!/^0x[0-9a-fA-F]{40}$/.test(v)) {
+    return { ok: false, message: v.startsWith("0x")
+      ? "An address is 42 characters; this one is " + v.length + "."
+      : "An address starts with 0x." };
+  }
+  if (/^0x0{40}$/.test(v)) return { ok: false, message: "The zero address cannot hold a position." };
+  // Note: without keccak256 this file cannot verify an EIP-55 checksum. The
+  // server app does. Saying so is better than implying a check that never ran.
+  return { ok: true, address: v };
+}
+
+async function probeChain() {
+  const started = performance.now();
+  try {
+    const [blockHex, chainHex] = await Promise.all([rpc("eth_blockNumber"), rpc("eth_chainId")]);
+    const reportedChain = Number(BigInt(chainHex));
+    if (reportedChain !== CHAIN.id) {
+      state.chain = {
+        reachable: false, block: null, latencyMs: Math.round(performance.now() - started),
+        error: { code: "RPC_CHAIN_ID_MISMATCH", message: "Endpoint reported chain id " + reportedChain + ", expected " + CHAIN.id + "." },
+        checkedAt: Date.now()
+      };
+    } else {
+      state.chain = {
+        reachable: true, block: BigInt(blockHex).toString(),
+        latencyMs: Math.round(performance.now() - started), error: null, checkedAt: Date.now()
+      };
+    }
+  } catch (e) {
+    state.chain = {
+      reachable: false, block: null, latencyMs: Math.round(performance.now() - started),
+      error: { code: e.code || "RPC_ERROR", message: e.message }, checkedAt: Date.now()
+    };
+  }
+  render();
+}
+
+async function scan() {
+  const v = validateAddress(state.address);
+  if (!v.ok) { state.addressError = v.message; render(); return; }
+  state.addressError = null;
+  state.scanning = true;
+  state.scanError = null;
+  state.historyError = null;
+  state.scanStatus = "Connecting…";
+  render();
+
+  try {
+    await probeChain();
+    if (!state.chain.reachable) throw new RpcError(state.chain.error.code, state.chain.error.message);
+
+    const { positions } = await discoverPositions(v.address, (msg) => {
+      state.scanStatus = msg; render();
+    });
+
+    // Native + registry ERC-20 balances, all pinned to the same read.
+    state.scanStatus = "Reading balances…";
+    render();
+    const tokenList = Object.keys(TOKENS);
+    const balCalls = [
+      { target: CHAIN.multicall3, data: SEL.getEthBalance + encAddress(v.address) },
+      ...tokenList.map((t) => ({ target: t, data: SEL.balanceOf + encAddress(v.address) }))
+    ];
+    // symbol/decimals come from the contracts, not from the registry above.
+    const [balRes, metaMap] = await Promise.all([multicall(balCalls), readTokens(tokenList)]);
+
+    const balances = [];
+    if (balRes[0] && balRes[0].success) {
+      const raw = decUint(balRes[0].data, 0);
+      if (raw > 0n) balances.push({ symbol: CHAIN.nativeSymbol, decimals: CHAIN.nativeDecimals, raw, native: true });
+    }
+    const balanceFailures = [];
+    tokenList.forEach((t, i) => {
+      const r = balRes[i + 1];
+      if (!r || !r.success) return;
+      const raw = decUint(r.data, 0);
+      if (raw === 0n) return;
+      const meta = metaMap.get(t.toLowerCase());
+      // No decimals means no trustworthy amount. The token is reported as a
+      // failure rather than rendered with a guessed scale.
+      if (!meta || meta.error) {
+        balanceFailures.push((TOKENS[t] && TOKENS[t].symbol) || truncHex(t));
+        return;
+      }
+      balances.push({ symbol: meta.symbol, decimals: meta.decimals, raw, native: false });
+    });
+    state.balances = balances;
+    state.balanceFailures = balanceFailures;
+
+    // Entry basis: chain logs where the endpoint allows it, otherwise the
+    // manual override. Never guessed.
+    const overrides = entryOverrides();
+    for (const p of positions) {
+      if (p.error) continue;
+      const manual = overrides[p.id];
+      if (manual) {
+        p.entry = { amount0: BigInt(manual.amount0), amount1: BigInt(manual.amount1), source: "manual" };
+      }
+      try {
+        state.scanStatus = "Reading history for #" + p.id + "…";
+        render();
+        const h = await fetchHistory(p.tokenId);
+        if (h.entry.amount0 > 0n || h.entry.amount1 > 0n) p.entry = h.entry;
+        p.collected = h.collected;
+        p.events = h.events;
+        if (h.events.length) p.openedAt = null;
+      } catch (e) {
+        state.historyError = e.message;
+      }
+    }
+
+    state.positions = positions;
+    state.scanStatus = "";
+  } catch (e) {
+    state.scanError = { code: e.code || "UNKNOWN", message: e.message };
+    state.positions = [];
+  } finally {
+    state.scanning = false;
+    render();
+  }
+}
+
+/* =========================================================================
+   10. VIEW HELPERS
+   ========================================================================= */
+const h = (html) => html;
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function kpi(label, value, opts = {}) {
+  const na = value === null || value === undefined;
+  return `<div class="card"><div class="bd pt kpi">
+    <div class="lbl">${esc(label)}${opts.hint ? `<span class="faintc" title="${esc(opts.hint)}" style="cursor:help">&#9432;</span>` : ""}</div>
+    <div class="val ${na ? "na" : opts.tone || ""}">${na ? "N/A" : esc(value)}</div>
+    ${!na && opts.secondary ? `<div class="sec ${opts.tone || ""}">${esc(opts.secondary)}</div>` : ""}
+    ${na && opts.why ? `<div class="why">${esc(opts.why)}</div>` : ""}
+  </div></div>`;
+}
+
+function freshness() {
+  if (state.mode === "demo") {
+    return `<span class="badge warn"><span class="dot" style="background:var(--warn)"></span>Fixture data</span>`;
+  }
+  if (state.chain.reachable === null) return `<span class="badge ghost">Not connected</span>`;
+  if (!state.chain.reachable) {
+    return `<span class="badge neg" title="${esc(state.chain.error.message)}"><span class="dot" style="background:var(--neg)"></span>${esc(state.chain.error.code)}</span>`;
+  }
+  const age = Math.round((Date.now() - state.chain.checkedAt) / 1000);
+  const cls = age < 60 ? "pos" : age < 300 ? "warn" : "neg";
+  const label = age < 60 ? "Live" : age < 300 ? "Delayed" : "Stale";
+  return `<span class="badge ${cls}"><span class="dot ${cls === "pos" ? "pulse" : ""}" style="background:var(--${cls === "pos" ? "pos" : cls === "warn" ? "warn" : "neg"})"></span>${label} · ${age}s ago · on-chain</span>`;
+}
+
+function needsServer(title, why) {
+  return `<div class="card"><div class="bd pt">
+    <div class="split" style="margin-bottom:8px"><span class="badge info">Needs the server app</span></div>
+    <div style="font-size:15px;font-weight:500;margin-bottom:6px">${esc(title)}</div>
+    <p class="sub" style="margin:0">${esc(why)}</p>
+    <p class="faintc" style="font-size:11px;margin:10px 0 0">No figure is shown rather than an estimate. This file has no database,
+    so it cannot hold the snapshot series this screen is computed from.</p>
+  </div></div>`;
+}
+
+function rangeBar(p, r) {
+  const clamp = Math.max(-12, Math.min(112, r.progressPct));
+  const cls = RANGE_META[r.state].cls;
+  const colour = cls === "pos" ? "var(--pos)" : cls === "warn" ? "var(--warn)" : "var(--neg)";
+  const lo = fmtWad(p.priceLower, p.priceLower > 1000n * WAD ? 0 : 4);
+  const hi = fmtWad(p.priceUpper, p.priceUpper > 1000n * WAD ? 0 : 4);
+  const now = fmtWad(p.priceQuotePerBase, p.priceQuotePerBase > 1000n * WAD ? 0 : 4);
+  return `<div class="range">
+    <div class="rtrack">
+      <div class="rbar"><i class="rfill" style="left:0;right:0;background:${colour}"></i></div>
+      <div class="redge" style="left:0"></div>
+      <div class="redge" style="right:0"></div>
+      <div class="rmark" style="left:${clamp}%;background:${colour}"></div>
+    </div>
+    <div class="rlabels">
+      <div><div>${lo}</div><div class="cap">Lower</div></div>
+      <div style="text-align:center"><div class="${cls === "pos" ? "pos" : cls === "warn" ? "warnc" : "neg"}">${now}</div><div class="cap">Current · ${r.progressPct.toFixed(0)}% through</div></div>
+      <div style="text-align:right"><div>${hi}</div><div class="cap">Upper</div></div>
+    </div>
+    <p class="faintc" style="font-size:11px;margin:8px 0 0">${esc(p.quoteSymbol)} per ${esc(p.baseSymbol)}. Position measured in tick space, which is linear in log-price.</p>
+  </div>`;
+}
+
+/* =========================================================================
+   11. SCREENS
+   ========================================================================= */
+const NAV = [
+  { id: "overview", label: "Overview", group: "Portfolio", mobile: true, icon: "M3 3h7v7H3zM14 3h7v4h-7zM14 10h7v11h-7zM3 13h7v8H3z" },
+  { id: "positions", label: "Positions", group: "Portfolio", mobile: true, icon: "M12 2 2 7l10 5 10-5zM2 17l10 5 10-5M2 12l10 5 10-5" },
+  { id: "wallets", label: "Wallets", group: "Portfolio", mobile: true, icon: "M3 6h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM16 12h3" },
+  { id: "rebalance", label: "Rebalance Center", short: "Rebalance", group: "Analysis", icon: "M12 3a9 9 0 1 0 9 9M12 7a5 5 0 1 0 5 5M12 12h.01" },
+  { id: "fees", label: "Fees", group: "Analysis", icon: "M12 2v20M17 6H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" },
+  { id: "hodl", label: "HODL Benchmark", short: "HODL", group: "Analysis", icon: "M12 3v18M5 7h14M7 7l-3 6h6zM17 7l-3 6h6z" },
+  { id: "performance", label: "Performance", group: "Analysis", icon: "M3 17l6-6 4 4 7-7M21 8v5h-5" },
+  { id: "simulations", label: "Simulations", group: "Analysis", icon: "M9 3h6M10 3v6l-6 10a2 2 0 0 0 2 3h12a2 2 0 0 0 2-3l-6-10V3" },
+  { id: "log", label: "Transaction Log", short: "Log", group: "Analysis", icon: "M4 3h12l4 4v14H4zM8 8h6M8 12h8M8 16h8" },
+  { id: "binance", label: "Binance", group: "Data", icon: "M3 21h18M5 21V10M19 21V10M12 2 3 8h18z" },
+  { id: "sources", label: "Data Sources", short: "Sources", group: "Data", icon: "M12 3c4.97 0 9 1.34 9 3s-4.03 3-9 3-9-1.34-9-3 4.03-3 9-3zM3 6v12c0 1.66 4.03 3 9 3s9-1.34 9-3V6" },
+  { id: "alerts", label: "Alerts", group: "System", mobile: true, icon: "M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0" },
+  { id: "settings", label: "Settings", group: "System", icon: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7.5 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0-1.1-2.7H1.6a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 3.3 7.5a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3h.1A1.6 1.6 0 0 0 9 1.6V1.6a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.1 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1h.1a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.4 1z" }
+];
+
+const SCREENS = {};
+
+/* ---------------------------------- Overview --------------------------- */
+SCREENS.overview = () => {
+  const pf = portfolio();
+  const list = activePositions();
+  const why = state.mode === "live"
+    ? (state.positions.length ? "No positions with liquidity" : "No wallet scanned yet")
+    : "No positions";
+
+  const unit = pf && !pf.mixed ? pf.unit : "";
+  const cards = [
+    kpi("Total LP value", pf && !pf.mixed ? fmtMoney(pf.value, unit) : null,
+        { hint: "Current inventory value, excluding uncollected fees.", why: pf && pf.mixed ? "Positions use different quote units and are not summed" : why }),
+    kpi("Total fees earned", pf && !pf.mixed ? fmtMoney(pf.fees, unit) : null,
+        { hint: "Uncollected plus collected fees.", why }),
+    kpi("LP vs HODL", pf && pf.hodlKnown && !pf.mixed ? fmtMoney(pf.lpVsHodl, unit, { signed: true }) : null,
+        { tone: pf && pf.hodlKnown ? toneOf(pf.lpVsHodl) : "",
+          secondary: pf && pf.lpVsHodlPct !== null ? fmtPct(pf.lpVsHodlPct, { signed: true }) : null,
+          hint: "LP value including fees, minus what the deposited tokens would be worth today.",
+          why: pf ? "No entry basis recorded for every position" : why }),
+    kpi("Divergence (ex-fees)", pf && pf.hodlKnown && !pf.mixed ? fmtMoney(pf.divergence, unit, { signed: true }) : null,
+        { tone: pf && pf.hodlKnown ? toneOf(pf.divergence) : "",
+          hint: "Inventory value minus HODL value, before fees. Computed from actual inventory, not the x*y=k approximation.",
+          why: pf ? "No entry basis recorded" : why }),
+    kpi("Capital in range", pf ? fmtPct(pf.capitalInRangePct) : null,
+        { tone: pf && pf.capitalInRangePct !== null && pf.capitalInRangePct >= 90n * WAD ? "pos" : "warnc",
+          hint: "Share of tracked capital currently earning fees.", why }),
+    kpi("Positions out of range", pf ? String(pf.outCount) : null,
+        { tone: pf && pf.outCount > 0 ? "neg" : "pos", hint: "Count whose current tick sits outside their bounds.", why }),
+    kpi("Net P/L", null, { hint: "Requires initial capital at entry prices.", why: "Needs entry-price history — see Performance" }),
+    kpi("Weighted fee APR", null, { hint: "Fee APR weighted by position capital.", why: "Needs a snapshot series over time" })
+  ];
+
+  return `
+    ${pageHead("Overview", "How much is the LP worth, what has it earned, and would holding the tokens have been better.")}
+    <div class="grid g4" style="margin-bottom:22px">${cards.join("")}</div>
+
+    <p class="eyebrow">Positions</p>
+    ${list.length ? `<div class="grid" style="margin-bottom:22px">${list.map(positionCard).join("")}</div>`
+      : `<div class="empty" style="margin-bottom:22px">
+          <p style="font-weight:500">No positions to show</p>
+          <p class="mutedc" style="font-size:13px;max-width:46ch;margin:0 auto 14px">
+            ${state.mode === "demo"
+              ? "Demo mode has no positions loaded."
+              : "Scan a public address on the Wallets screen to discover its Uniswap V3 positions on Base."}</p>
+          <button class="btn primary" data-go="wallets">Go to Wallets</button>
+        </div>`}
+
+    <p class="eyebrow">Portfolio value vs HODL benchmark vs initial capital</p>
+    ${needsServer("Three-line portfolio chart",
+      "Plotting LP value against the HODL benchmark and initial capital needs a stored snapshot series. A single read gives one point, and one point is not a chart.")}
+  `;
+};
+
+/* --------------------------------- Positions --------------------------- */
+function positionCard(p) {
+  const r = rangeEngine(p, state.thresholds);
+  const meta = RANGE_META[r.state];
+  const hodl = hodlEngine(p);
+  const value = valueOf(p, p.amount0, p.amount1);
+  const uncollected = valueOf(p, p.uncollected0, p.uncollected1);
+  const age = p.openedAt ? Math.round((Date.now() - p.openedAt) / 86400000) + " d" : "unknown";
+
+  return `<div class="card"><div class="bd pt">
+    <div class="split" style="justify-content:space-between;margin-bottom:12px">
+      <div>
+        <div style="font-size:15px;font-weight:600">${esc(p.pairLabel)}</div>
+        <div class="chips" style="margin-top:6px">
+          <span class="badge ghost">Uniswap V3</span>
+          <span class="badge ghost">${esc(CHAIN.shortName || "Base")}</span>
+          <span class="badge ghost">${esc(FEE_LABEL[p.feeTier] || p.feeTier)}</span>
+          <span class="badge ghost mono">#${esc(p.id)}</span>
+        </div>
+      </div>
+      <div style="text-align:right">
+        <span class="badge ${meta.cls}">${meta.label}</span>
+        <div class="faintc" style="font-size:11px;margin-top:6px">age ${esc(age)}</div>
+      </div>
+    </div>
+
+    ${rangeBar(p, r)}
+
+    <div class="grid g4" style="margin-top:16px;gap:12px">
+      <div class="kpi"><div class="lbl">Position value</div><div class="val" style="font-size:19px">${fmtMoney(value, p.unit)}</div></div>
+      <div class="kpi"><div class="lbl">Uncollected fees</div><div class="val ${p.feesKnown ? "pos" : "na"}" style="font-size:19px">${p.feesKnown ? fmtMoney(uncollected, p.unit) : "N/A"}</div>${!p.feesKnown ? `<div class="why">Tick data unavailable</div>` : ""}</div>
+      <div class="kpi"><div class="lbl">LP vs HODL</div><div class="val ${hodl ? toneOf(hodl.lpVsHodl) : "na"}" style="font-size:19px">${hodl ? fmtMoney(hodl.lpVsHodl, p.unit, { signed: true }) : "N/A"}</div>${hodl ? `<div class="sec ${toneOf(hodl.lpVsHodl)}">${fmtPct(hodl.lpVsHodlPct, { signed: true })}</div>` : `<div class="why">No entry basis</div>`}</div>
+      <div class="kpi"><div class="lbl">Fee APR</div><div class="val na" style="font-size:19px">N/A</div><div class="why">Needs a snapshot series</div></div>
+    </div>
+
+    <dl class="rows" style="margin-top:14px">
+      <div><dt>${esc(p.token0.symbol)}</dt><dd>${fmtAmount(p.amount0, p.token0.decimals)}</dd></div>
+      <div><dt>${esc(p.token1.symbol)}</dt><dd>${fmtAmount(p.amount1, p.token1.decimals)}</dd></div>
+    </dl>
+
+    <div class="split" style="margin-top:14px;justify-content:space-between">
+      <button class="btn sm" data-detail="${esc(p.id)}">Open detail</button>
+      <span class="faintc" style="font-size:11px">${p.source === "fixture" ? "fixture input" : "on-chain"} · dist to lower ${r.distLowerPct.toFixed(1)}% · to upper ${r.distUpperPct.toFixed(1)}%</span>
+    </div>
+  </div></div>`;
+}
+
+SCREENS.positions = () => {
+  const list = activePositions();
+  const broken = state.mode === "live" ? state.positions.filter((p) => p.error) : [];
+  return `
+    ${pageHead("Positions", "Every tracked concentrated-liquidity position with its range state, inventory, fees, and performance against HODL.")}
+    ${broken.length ? `<div class="note neg" style="margin-bottom:14px">${broken.length} position(s) could not be read: ${broken.map((b) => "#" + b.tokenId + " (" + b.error + ")").join(", ")}. They are omitted rather than shown with guessed values.</div>` : ""}
+    ${list.length ? `<div class="grid">${list.map(positionCard).join("")}</div>`
+      : `<div class="empty"><p style="font-weight:500">No positions discovered</p>
+         <p class="mutedc" style="font-size:13px">Position discovery reads the Uniswap V3 NonfungiblePositionManager for a public address.</p>
+         <button class="btn primary" style="margin-top:12px" data-go="wallets">Go to Wallets</button></div>`}
+  `;
+};
+
+/* ------------------------------ Position detail ------------------------ */
+SCREENS.detail = () => {
+  const p = activePositions().find((x) => x.id === state.detailId);
+  if (!p) return `${pageHead("Position detail", "")}<div class="empty"><p>That position is not loaded.</p><button class="btn" style="margin-top:12px" data-go="positions">Back to positions</button></div>`;
+
+  const r = rangeEngine(p, state.thresholds);
+  const meta = RANGE_META[r.state];
+  const hodl = hodlEngine(p);
+  const rec = rebalanceEngine(p, r, hodl, state.thresholds);
+  const recMeta = SIGNAL_META[rec.signal];
+  const value = valueOf(p, p.amount0, p.amount1);
+
+  const v0 = toWad(p.amount0, p.token0.decimals);
+  const v1 = toWad(p.amount1, p.token1.decimals);
+  const val0 = p.quoteIsToken0 ? v0 : (v0 * p.priceQuotePerBase) / WAD;
+  const val1 = p.quoteIsToken0 ? (v1 * p.priceQuotePerBase) / WAD : v1;
+  const alloc0 = value > 0n ? pctWad(val0, value) : null;
+  const alloc1 = value > 0n ? pctWad(val1, value) : null;
+
+  return `
+    <div class="split" style="justify-content:space-between;margin-bottom:14px">
+      <div>
+        <h1>${esc(p.pairLabel)}</h1>
+        <p class="sub" style="margin:0">Uniswap V3 · ${esc(FEE_LABEL[p.feeTier] || p.feeTier)} · Base · position <span class="mono">#${esc(p.id)}</span></p>
+      </div>
+      <div class="split"><span class="badge ${meta.cls}">${meta.label}</span><button class="btn sm" data-go="positions">← All positions</button></div>
+    </div>
+
+    <div class="grid g4" style="margin-bottom:18px">
+      ${kpi("Position value", fmtMoney(value, p.unit))}
+      ${kpi("Total fees", hodl ? fmtMoney(hodl.totalFees, p.unit) : (p.feesKnown ? fmtMoney(valueOf(p, p.uncollected0, p.uncollected1), p.unit) : null), { tone: "pos", why: "Fee growth unavailable" })}
+      ${kpi("LP vs HODL", hodl ? fmtMoney(hodl.lpVsHodl, p.unit, { signed: true }) : null, { tone: hodl ? toneOf(hodl.lpVsHodl) : "", secondary: hodl ? fmtPct(hodl.lpVsHodlPct, { signed: true }) : null, why: "No entry basis recorded" })}
+      ${kpi("Divergence ex-fees", hodl ? fmtMoney(hodl.divergenceExFees, p.unit, { signed: true }) : null, { tone: hodl ? toneOf(hodl.divergenceExFees) : "", why: "No entry basis recorded" })}
+    </div>
+
+    <div class="card" style="margin-bottom:18px"><div class="hd"><h3>B · Price range</h3><span class="badge ghost">${r.widthPct !== null ? "width " + r.widthPct.toFixed(1) + "%" : ""}</span></div><div class="bd">${rangeBar(p, r)}</div></div>
+
+    <div class="grid g2" style="margin-bottom:18px">
+      <div class="card"><div class="hd"><h3>C · Inventory</h3></div><div class="bd">
+        <dl class="rows">
+          <div><dt>${esc(p.token0.symbol)}</dt><dd>${fmtAmount(p.amount0, p.token0.decimals)}</dd></div>
+          <div><dt>${esc(p.token0.symbol)} value</dt><dd>${fmtMoney(val0, p.unit)}</dd></div>
+          <div><dt>${esc(p.token1.symbol)}</dt><dd>${fmtAmount(p.amount1, p.token1.decimals)}</dd></div>
+          <div><dt>${esc(p.token1.symbol)} value</dt><dd>${fmtMoney(val1, p.unit)}</dd></div>
+          <div><dt>Allocation</dt><dd>${alloc0 !== null ? fmtPct(alloc0, { frac: 1 }) + " / " + fmtPct(alloc1, { frac: 1 }) : "N/A"}</dd></div>
+        </dl>
+        ${!r.inRange ? `<div class="note warn" style="margin-top:12px">Out of range means the position is entirely one side of the pair.
+          ${r.state === "OUT_BELOW"
+            ? "Price fell through the lower bound, so the position was bought into " + esc(p.baseSymbol) + " — you hold the asset that fell."
+            : "Price rose through the upper bound, so the position was sold into " + esc(p.quoteSymbol) + " — you sold the asset that rose."}
+          This is how concentrated liquidity works, not a fault — but it earns nothing while it lasts.</div>` : ""}
+      </div></div>
+
+      <div class="card"><div class="hd"><h3>D · Fees</h3>${p.feesKnown ? "" : `<span class="badge neg">unavailable</span>`}</div><div class="bd">
+        ${p.feesKnown ? `<dl class="rows">
+          <div><dt>Uncollected ${esc(p.token0.symbol)}</dt><dd>${fmtAmount(p.uncollected0, p.token0.decimals)}</dd></div>
+          <div><dt>Uncollected ${esc(p.token1.symbol)}</dt><dd>${fmtAmount(p.uncollected1, p.token1.decimals)}</dd></div>
+          <div><dt>Uncollected value</dt><dd class="pos">${fmtMoney(valueOf(p, p.uncollected0, p.uncollected1), p.unit)}</dd></div>
+          <div><dt>Collected to date</dt><dd>${p.collected ? fmtMoney(valueOf(p, p.collected.amount0, p.collected.amount1), p.unit) : "N/A"}</dd></div>
+          <div><dt>Lifetime fees</dt><dd class="pos">${hodl ? fmtMoney(hodl.totalFees, p.unit) : "N/A"}</dd></div>
+          <div><dt>Fee APR</dt><dd class="faintc">N/A</dd></div>
+        </dl>
+        ${p.collected && p.collected.approximate ? `<div class="note warn" style="margin-top:10px">Collected total is an upper bound: this position has decrease events, and a Collect call returns withdrawn principal alongside fees. The server app separates them.</div>` : ""}
+        <p class="faintc" style="font-size:11px;margin:10px 0 0">Fee APR needs fees measured over a period against average capital over that period. One read cannot produce it, and annualising a single observation would be meaningless.</p>`
+        : `<p class="mutedc" style="font-size:13px;margin:0">Tick fee-growth data could not be read for this pool, so uncollected fees cannot be computed. No figure is shown rather than a guess.</p>`}
+      </div></div>
+    </div>
+
+    <div class="grid g2" style="margin-bottom:18px">
+      <div class="card"><div class="hd"><h3>E · HODL benchmark</h3>${p.entry ? `<span class="badge ghost">basis: ${esc(p.entry.source)}</span>` : ""}</div><div class="bd">
+        ${hodl ? `<dl class="rows">
+          <div><dt>Entry ${esc(p.token0.symbol)}</dt><dd>${fmtAmount(p.entry.amount0, p.token0.decimals)}</dd></div>
+          <div><dt>Entry ${esc(p.token1.symbol)}</dt><dd>${fmtAmount(p.entry.amount1, p.token1.decimals)}</dd></div>
+          <div><dt>Value if simply held</dt><dd>${fmtMoney(hodl.hodlValue, p.unit)}</dd></div>
+          <div><dt>LP value excluding fees</dt><dd>${fmtMoney(hodl.lpExFees, p.unit)}</dd></div>
+          <div><dt>LP value including fees</dt><dd>${fmtMoney(hodl.lpWithFees, p.unit)}</dd></div>
+          <div><dt><b>LP vs HODL</b></dt><dd class="${toneOf(hodl.lpVsHodl)}"><b>${fmtMoney(hodl.lpVsHodl, p.unit, { signed: true })}</b></dd></div>
+        </dl>` : entryForm(p)}
+      </div></div>
+
+      <div class="card"><div class="hd"><h3>F · Divergence</h3></div><div class="bd">
+        ${hodl ? `<div class="waterfall">
+          <div><span class="mutedc">Divergence before fees</span><span class="${toneOf(hodl.divergenceExFees)}">${fmtMoney(hodl.divergenceExFees, p.unit, { signed: true })}</span></div>
+          <div><span class="mutedc">Fees earned</span><span class="pos">${fmtMoney(hodl.totalFees, p.unit, { signed: true })}</span></div>
+          <div class="rule"><span><b>LP vs HODL</b></span><span class="${toneOf(hodl.lpVsHodl)}"><b>${fmtMoney(hodl.lpVsHodl, p.unit, { signed: true })}</b></span></div>
+        </div>
+        <p class="mutedc" style="font-size:12px;margin:14px 0 0">Shown as a decomposition, not a single &ldquo;IL&rdquo; percentage. The sum is what matters: fees can more than pay for divergence, or fail to.</p>
+        <p class="faintc" style="font-size:11px;margin:8px 0 0">Computed from actual inventory against the entry basket. The classic x*y=k formula assumes a full-range position and does not describe a concentrated one.</p>`
+        : `<p class="mutedc" style="font-size:13px;margin:0">Divergence needs an entry basis. Record one on the left.</p>`}
+      </div></div>
+    </div>
+
+    <div class="card"><div class="hd"><h3>G · Rebalance analysis</h3>
+      <div class="split"><span class="badge ${recMeta.cls}">${recMeta.label}</span><span class="badge ghost">confidence ${esc(rec.confidence)}</span></div></div>
+      <div class="bd">
+        <p class="mutedc" style="font-size:13px;margin:0 0 14px">${esc(recMeta.blurb)}</p>
+        <table>
+          <thead><tr><th>Metric</th><th>Reading</th><th class="r hide-sm">Effect</th></tr></thead>
+          <tbody>${rec.reasons.map((x) => `<tr>
+            <td class="mutedc">${esc(x.metric)}</td><td>${esc(x.value)}</td>
+            <td class="r hide-sm"><span class="badge ${x.effect === "supports" ? "warn" : "ghost"}">${x.effect === "supports" ? "supports acting" : "against acting"}</span></td>
+          </tr>`).join("")}</tbody>
+        </table>
+        <div class="note plain" style="margin-top:14px">Estimated cost to act: <b class="mono">~${esc(rec.estimatedCost)} ${esc(p.unit)}</b> (gas plus swap slippage, configurable in Settings).
+        Nothing is executed. This file cannot send a transaction — it has no signing code and no ABI entry for any state-changing call.</div>
+      </div></div>
+  `;
+};
+
+function entryForm(p) {
+  return `<p class="mutedc" style="font-size:13px;margin:0 0 12px">
+    No entry basis recorded, so LP vs HODL cannot be computed.
+    ${state.mode === "live" ? "Chain logs did not yield one — many public endpoints reject a full-history <span class='mono'>eth_getLogs</span>. " : ""}
+    Enter what you deposited and it will be stored in this browser only.</p>
+  <div class="grid g2" style="gap:10px">
+    <div><label class="fl">Entry ${esc(p.token0.symbol)}</label><input class="mono" id="entry0" placeholder="0.0" inputmode="decimal" /></div>
+    <div><label class="fl">Entry ${esc(p.token1.symbol)}</label><input class="mono" id="entry1" placeholder="0.0" inputmode="decimal" /></div>
+  </div>
+  <button class="btn primary sm" style="margin-top:12px" data-save-entry="${esc(p.id)}">Record entry basis</button>
+  <p class="faintc" style="font-size:11px;margin:10px 0 0">Marked <b>user-supplied</b>, not chain-derived. The server app captures this once from the mint transaction and never recomputes it.</p>`;
+}
+
+/* --------------------------------- Wallets ----------------------------- */
+SCREENS.wallets = () => {
+  const bal = activeBalances();
+  return `
+    ${pageHead("Wallets", "Track any public EVM address. No wallet connection, no signature, and no key material — ever.")}
+
+    <div class="card" style="margin-bottom:18px;border-color:rgba(46,189,133,.2);background:rgba(46,189,133,.04)">
+      <div class="bd pt">
+        <div style="font-weight:500;margin-bottom:8px">Read-only by construction</div>
+        <ul class="mutedc" style="margin:0;padding-left:18px;font-size:13px;line-height:1.75">
+          <li>This file never asks for a seed phrase or a private key.</li>
+          <li>It contains no signing code and no wallet-connect flow.</li>
+          <li>Its ABI table has no entry for <span class="mono">mint</span>, <span class="mono">burn</span>, <span class="mono">collect</span>, or <span class="mono">swap</span> — it cannot send a transaction it cannot encode.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:18px"><div class="hd"><h3>Scan a public address</h3>${freshness()}</div><div class="bd">
+      <div class="grid" style="grid-template-columns:1fr 220px auto;gap:10px;align-items:end">
+        <div>
+          <label class="fl">Public EVM address</label>
+          <input class="mono ${state.addressError ? "bad" : state.address && validateAddress(state.address).ok ? "good" : ""}" id="addr" value="${esc(state.address)}" placeholder="0x…" spellcheck="false" autocomplete="off" />
+        </div>
+        <div>
+          <label class="fl">Base RPC endpoint</label>
+          <input class="mono" id="rpcurl" value="${esc(state.rpcUrl)}" spellcheck="false" autocomplete="off" />
+        </div>
+        <div><button class="btn primary" id="scanbtn" ${state.scanning ? "disabled" : ""}>${state.scanning ? "Scanning…" : "Scan"}</button></div>
+      </div>
+      ${state.addressError ? `<p class="neg" style="font-size:12px;margin:10px 0 0">${esc(state.addressError)}</p>` : ""}
+      ${state.scanning ? `<p class="infoc" style="font-size:12px;margin:10px 0 0">${esc(state.scanStatus)}</p>` : ""}
+      ${state.scanError ? `<div class="note neg" style="margin-top:12px"><b class="mono">${esc(state.scanError.code)}</b><br />${esc(state.scanError.message)}</div>` : ""}
+      ${state.historyError ? `<div class="note warn" style="margin-top:12px"><b>History unavailable.</b> ${esc(state.historyError)}<br />Entry basis and collected fees fall back to manual entry per position.</div>` : ""}
+      <p class="faintc" style="font-size:11px;margin:12px 0 0">
+        Scanning runs entirely in your browser and talks to the RPC endpoint directly — nothing is sent anywhere else.
+        This file cannot verify an EIP-55 checksum (that needs keccak256, which it does not bundle); the server app does.
+      </p>
+    </div></div>
+
+    ${bal.length ? `<div class="card"><div class="hd"><h3>Balances</h3>${freshness()}</div><div class="bd">
+      <div class="scroll"><table>
+        <thead><tr><th>Asset</th><th class="r">Balance</th><th class="r hide-sm">Decimals</th><th class="r hide-sm">Source</th></tr></thead>
+        <tbody>${bal.map((b) => `<tr>
+          <td><b>${esc(b.symbol)}</b>${b.native ? ` <span class="faintc" style="font-size:10px">native</span>` : ""}</td>
+          <td class="r num">${fmtAmount(b.raw, b.decimals)}</td>
+          <td class="r num hide-sm faintc">${b.decimals}</td>
+          <td class="r hide-sm"><span class="badge ${state.mode === "demo" ? "warn" : "pos"}">${state.mode === "demo" ? "fixture" : "on-chain"}</span></td>
+        </tr>`).join("")}</tbody>
+      </table></div>
+      ${state.mode === "live" && state.balanceFailures && state.balanceFailures.length ? `<div class="note warn" style="margin-top:12px">
+        <b>${state.balanceFailures.length} asset(s) omitted:</b> ${esc(state.balanceFailures.join(", "))} — <span class="mono">decimals()</span> could not be read,
+        so any amount shown would be scaled by a guess. Omitted rather than approximated.</div>` : ""}
+      <p class="faintc" style="font-size:11px;margin:12px 0 0">Zero balances are omitted. Symbols and decimals are read from each token contract during the scan, never from the static registry.</p>
+    </div></div>` : ""}
+  `;
+};
+
+/* -------------------------------- Rebalance ---------------------------- */
+SCREENS.rebalance = () => {
+  const list = activePositions();
+  const ranked = list.map((p) => {
+    const r = rangeEngine(p, state.thresholds);
+    return { p, r, rec: rebalanceEngine(p, r, hodlEngine(p), state.thresholds) };
+  }).sort((a, b) => {
+    const order = { EXIT_REVIEW: 0, REBALANCE_REVIEW: 1, REBALANCE_SOON: 2, WATCH: 3, HOLD: 4 };
+    return order[a.rec.signal] - order[b.rec.signal];
+  });
+
+  return `
+    ${pageHead("Rebalance Center", "Recommendations only. Nothing is executed automatically, and this file cannot construct a transaction.")}
+    ${ranked.length ? `<div class="grid" style="margin-bottom:18px">${ranked.map(({ p, r, rec }) => {
+      const m = SIGNAL_META[rec.signal];
+      return `<div class="card"><div class="bd pt">
+        <div class="split" style="justify-content:space-between;margin-bottom:10px">
+          <div><b>${esc(p.pairLabel)}</b> <span class="faintc mono" style="font-size:11px">#${esc(p.id)}</span></div>
+          <div class="split"><span class="badge ${RANGE_META[r.state].cls}">${RANGE_META[r.state].label}</span><span class="badge ${m.cls}">${m.label}</span></div>
+        </div>
+        <p class="mutedc" style="font-size:13px;margin:0 0 10px">${esc(m.blurb)}</p>
+        <ul class="mutedc" style="margin:0;padding-left:18px;font-size:12.5px;line-height:1.75">
+          ${rec.reasons.map((x) => `<li><span class="faintc">${esc(x.metric)}:</span> ${esc(x.value)}</li>`).join("")}
+        </ul>
+        <div class="split" style="margin-top:12px;justify-content:space-between">
+          <span class="faintc" style="font-size:11px">estimated cost ~${esc(rec.estimatedCost)} ${esc(p.unit)} · confidence ${esc(rec.confidence)}</span>
+          <button class="btn sm" data-detail="${esc(p.id)}">Detail</button>
+        </div>
+      </div></div>`;
+    }).join("")}</div>` : `<div class="empty"><p>No positions to evaluate.</p></div>`}
+
+    <div class="card"><div class="hd"><h3>Signal rules</h3></div><div class="bd">
+      <dl class="rows">
+        <div><dt>In range, more than ${state.thresholds.safeEdgePct}% from the nearest edge</dt><dd><span class="badge pos">HOLD</span></dd></div>
+        <div><dt>Within ${state.thresholds.nearEdgePct}% of an edge</dt><dd><span class="badge warn">WATCH</span></dd></div>
+        <div><dt>Within ${state.thresholds.criticalEdgePct}% of an edge</dt><dd><span class="badge warn">REBALANCE SOON</span></dd></div>
+        <div><dt>Outside the range</dt><dd><span class="badge neg">REBALANCE REVIEW</span></dd></div>
+        <div><dt>Small position, or behind HODL while out of range</dt><dd><span class="badge neg">EXIT REVIEW</span></dd></div>
+      </dl>
+      <p class="mutedc" style="font-size:12px;margin:14px 0 0">Edge distance is only the starting point. It is weighed against fees earned, position size, and the estimated cost of acting — a rebalance that costs more than it earns is downgraded, and the reasoning says so.</p>
+    </div></div>
+  `;
+};
+
+/* ----------------------------------- Fees ------------------------------ */
+SCREENS.fees = () => {
+  const list = activePositions();
+  let unc = 0n, col = 0n, unit = null, mixed = false;
+  for (const p of list) {
+    if (unit === null) unit = p.unit; else if (unit !== p.unit) mixed = true;
+    unc += valueOf(p, p.uncollected0, p.uncollected1);
+    if (p.collected) col += valueOf(p, p.collected.amount0, p.collected.amount1);
+  }
+  return `
+    ${pageHead("Fees", "Uncollected, collected, and lifetime fees. Rates that need a period of observation are not shown from a single read.")}
+    <div class="grid g4" style="margin-bottom:18px">
+      ${kpi("Uncollected fees", list.length && !mixed ? fmtMoney(unc, unit) : null, { tone: "pos", why: mixed ? "Positions use different quote units" : "No positions" })}
+      ${kpi("Collected fees", list.length && !mixed ? fmtMoney(col, unit) : null, { why: mixed ? "Mixed quote units" : "No positions" })}
+      ${kpi("Lifetime fees", list.length && !mixed ? fmtMoney(unc + col, unit) : null, { tone: "pos", why: mixed ? "Mixed quote units" : "No positions" })}
+      ${kpi("Weighted fee APR", null, { why: "Needs fees over a period vs average capital over that period" })}
+    </div>
+
+    ${list.length ? `<div class="card" style="margin-bottom:18px"><div class="hd"><h3>Per position</h3></div><div class="bd">
+      <div class="scroll"><table>
+        <thead><tr><th>Pair</th><th class="r">Uncollected</th><th class="r hide-sm">Collected</th><th class="r">Lifetime</th><th class="r hide-sm">Fee APR</th></tr></thead>
+        <tbody>${list.map((p) => {
+          const u = valueOf(p, p.uncollected0, p.uncollected1);
+          const c = p.collected ? valueOf(p, p.collected.amount0, p.collected.amount1) : null;
+          return `<tr><td>${esc(p.pairLabel)} <span class="faintc mono" style="font-size:10px">#${esc(p.id)}</span></td>
+            <td class="r num pos">${p.feesKnown ? fmtMoney(u, p.unit) : "N/A"}</td>
+            <td class="r num hide-sm">${c !== null ? fmtMoney(c, p.unit) : "N/A"}</td>
+            <td class="r num">${c !== null && p.feesKnown ? fmtMoney(u + c, p.unit) : "N/A"}</td>
+            <td class="r faintc hide-sm">N/A</td></tr>`;
+        }).join("")}</tbody>
+      </table></div>
+    </div></div>` : ""}
+
+    <div class="card" style="margin-bottom:18px"><div class="hd"><h3>How uncollected fees are computed</h3></div><div class="bd">
+      <pre class="code">feeGrowthInside = feeGrowthGlobal - below - above
+
+  below = tick &gt;= tickLower ? lower.feeGrowthOutside
+                            : feeGrowthGlobal - lower.feeGrowthOutside
+  above = tick &lt;  tickUpper ? upper.feeGrowthOutside
+                            : feeGrowthGlobal - upper.feeGrowthOutside
+
+uncollected = tokensOwed
+            + liquidity * (feeGrowthInside - feeGrowthInsideLast) / 2^128</pre>
+      <div class="note warn" style="margin-top:12px"><b>These accumulators are uint256 values that intentionally underflow.</b>
+      Solidity wraps on subtraction; JavaScript bigint does not. Every subtraction above is masked back into uint256 —
+      omitting the mask produces negative fee growth and wildly wrong numbers. It is the most common bug in third-party LP trackers.</div>
+    </div></div>
+
+    ${needsServer("Fee APR with a confidence label",
+      "Fee APR is fees over a period divided by average capital over that period, annualised. Average capital is a time-weighted mean across stored snapshots — a single read has no period to measure and no average to divide by. Annualising it anyway would produce an authoritative-looking number that means nothing.")}
+  `;
+};
+
+/* ----------------------------------- HODL ------------------------------ */
+SCREENS.hodl = () => {
+  const list = activePositions();
+  const withBasis = list.filter((p) => p.entry);
+  return `
+    ${pageHead("HODL Benchmark", "The counterfactual: what the deposited tokens would be worth today if they had simply been held.")}
+    ${withBasis.length ? `<div class="grid" style="margin-bottom:18px">${withBasis.map((p) => {
+      const hd = hodlEngine(p);
+      return `<div class="card"><div class="hd"><h3>${esc(p.pairLabel)} <span class="mono faintc">#${esc(p.id)}</span></h3><span class="badge ghost">basis: ${esc(p.entry.source)}</span></div><div class="bd">
+        <div class="grid g4" style="gap:12px;margin-bottom:14px">
+          <div class="kpi"><div class="lbl">HODL value now</div><div class="val" style="font-size:19px">${fmtMoney(hd.hodlValue, p.unit)}</div></div>
+          <div class="kpi"><div class="lbl">LP ex-fees</div><div class="val" style="font-size:19px">${fmtMoney(hd.lpExFees, p.unit)}</div></div>
+          <div class="kpi"><div class="lbl">LP with fees</div><div class="val" style="font-size:19px">${fmtMoney(hd.lpWithFees, p.unit)}</div></div>
+          <div class="kpi"><div class="lbl">LP vs HODL</div><div class="val ${toneOf(hd.lpVsHodl)}" style="font-size:19px">${fmtMoney(hd.lpVsHodl, p.unit, { signed: true })}</div><div class="sec ${toneOf(hd.lpVsHodl)}">${fmtPct(hd.lpVsHodlPct, { signed: true })}</div></div>
+        </div>
+        <div class="waterfall">
+          <div><span class="mutedc">Divergence before fees</span><span class="${toneOf(hd.divergenceExFees)}">${fmtMoney(hd.divergenceExFees, p.unit, { signed: true })}</span></div>
+          <div><span class="mutedc">Fees earned</span><span class="pos">${fmtMoney(hd.totalFees, p.unit, { signed: true })}</span></div>
+          <div class="rule"><span><b>LP vs HODL</b></span><span class="${toneOf(hd.lpVsHodl)}"><b>${fmtMoney(hd.lpVsHodl, p.unit, { signed: true })}</b></span></div>
+        </div>
+      </div></div>`;
+    }).join("")}</div>` : `<div class="empty" style="margin-bottom:18px"><p style="font-weight:500">No entry basis recorded</p>
+      <p class="mutedc" style="font-size:13px;max-width:52ch;margin:0 auto">LP vs HODL needs the quantities you deposited. Open a position and record them, or let a scan read them from chain logs where the endpoint allows it.</p></div>`}
+
+    <div class="card"><div class="hd"><h3>How it is computed</h3></div><div class="bd">
+      <pre class="code">HODL_VALUE_NOW     = entry_token0_qty x current_price0
+                   + entry_token1_qty x current_price1
+
+LP_VALUE_EX_FEES   = current inventory at current prices
+LP_VALUE_WITH_FEES = LP_VALUE_EX_FEES + uncollected + collected
+
+LP_VS_HODL         = LP_VALUE_WITH_FEES - HODL_VALUE_NOW
+LP_VS_HODL_PERCENT = LP_VS_HODL / HODL_VALUE_NOW x 100</pre>
+      <p class="mutedc" style="font-size:12px;margin:12px 0 0">Only entry <b>quantities</b> are needed, not entry prices — the counterfactual is those same tokens valued today. Entry prices matter only for initial capital, which this file does not claim to know.</p>
+      <div class="note warn" style="margin-top:12px"><b>The entry basis must be immutable.</b> The server app captures it once and never recomputes it. Here it lives in this browser's localStorage, which is not the same guarantee — clearing site data loses it.</div>
+    </div></div>
+  `;
+};
+
+/* ------------------------------- Performance --------------------------- */
+SCREENS.performance = () => `
+  ${pageHead("Performance", "Rolling 30, 90, and 365 day returns measured against the HODL benchmark, net of fees and gas.")}
+  <div class="grid g3" style="margin-bottom:18px">
+    ${["30 days", "90 days", "365 days"].map((period) => `<div class="card"><div class="hd"><h3>${period}</h3></div><div class="bd">
+      <dl class="rows">${["LP return", "HODL return", "LP vs HODL", "Fees earned", "Fee APR", "Time in range", "Rebalances", "Gas cost", "Net result"]
+        .map((row) => `<div><dt>${row}</dt><dd class="faintc">N/A</dd></div>`).join("")}</dl>
+    </div></div>`).join("")}
+  </div>
+  ${needsServer("Period returns",
+    "Every figure here is the difference between two points in a snapshot series: LP value then versus now, HODL value then versus now, fees accrued between them, gas spent along the way. A single read is one point. Two points are the minimum for a return, and this file stores none.")}
+`;
+
+/* ------------------------------- Simulations --------------------------- */
+SCREENS.simulations = () => {
+  const s = state.sim;
+  const r = simulate(s);
+  return `
+    ${pageHead("Simulation Lab", "Scenario modelling for range width and price movement.")}
+    <div class="split" style="margin-bottom:14px"><span class="badge warn">Estimates — not forecasts</span>
+      <span class="faintc" style="font-size:11px">Fully functional here: this is pure maths and needs no stored data.</span></div>
+
+    <div class="grid g2" style="margin-bottom:18px">
+      <div class="card"><div class="hd"><h3>Inputs</h3></div><div class="bd">
+        <div class="grid g2" style="gap:12px">
+          <div><label class="fl">Capital (quote units)</label><input class="mono" type="number" id="sim-capital" value="${s.capital}" min="1" /></div>
+          <div><label class="fl">Fee tier</label><select id="sim-fee">${[100, 500, 3000, 10000].map((f) => `<option value="${f}" ${f === s.feeTier ? "selected" : ""}>${FEE_LABEL[f]}</option>`).join("")}</select></div>
+          <div><label class="fl">Range width ±%</label><select id="sim-range">${[2, 5, 10, 15, 25, 50].map((v) => `<option value="${v}" ${v === s.rangePct ? "selected" : ""}>±${v}%</option>`).join("")}</select></div>
+          <div><label class="fl">Price scenario</label><select id="sim-move">${[-50, -20, -10, 0, 10, 20, 50].map((v) => `<option value="${v}" ${v === s.movePct ? "selected" : ""}>${v > 0 ? "+" : ""}${v}%</option>`).join("")}</select></div>
+          <div><label class="fl">Assumed daily pool volume</label><input class="mono" type="number" id="sim-volume" value="${s.volume}" min="0" /></div>
+          <div><label class="fl">Duration</label><select id="sim-days">${[30, 90, 365].map((v) => `<option value="${v}" ${v === s.days ? "selected" : ""}>${v} days</option>`).join("")}</select></div>
+        </div>
+        <p class="faintc" style="font-size:11px;margin:14px 0 0">Volume is your assumption, not a prediction. The simulator does not forecast it.</p>
+      </div></div>
+
+      <div class="card"><div class="hd"><h3>Outputs</h3></div><div class="bd">
+        <dl class="rows">
+          <div><dt>Estimated fees over ${s.days} days</dt><dd class="pos">${r.fees.toFixed(2)}</dd></div>
+          <div><dt>Probability-weighted time in range</dt><dd>${(r.timeInRange * 100).toFixed(0)}%</dd></div>
+          <div><dt>Ending inventory (base)</dt><dd>${r.endBase.toFixed(6)}</dd></div>
+          <div><dt>Ending inventory (quote)</dt><dd>${r.endQuote.toFixed(2)}</dd></div>
+          <div><dt>LP value at scenario price</dt><dd>${r.lpValue.toFixed(2)}</dd></div>
+          <div><dt>HODL value at scenario price</dt><dd>${r.hodlValue.toFixed(2)}</dd></div>
+          <div><dt>Divergence before fees</dt><dd class="${r.divergence < 0 ? "neg" : "pos"}">${r.divergence >= 0 ? "+" : ""}${r.divergence.toFixed(2)}</dd></div>
+          <div><dt><b>LP vs HODL after fees</b></dt><dd class="${r.lpVsHodl < 0 ? "neg" : "pos"}"><b>${r.lpVsHodl >= 0 ? "+" : ""}${r.lpVsHodl.toFixed(2)}</b></dd></div>
+        </dl>
+      </div></div>
+    </div>
+
+    <div class="card"><div class="hd"><h3>The trade-off this exists to show</h3></div><div class="bd">
+      <p class="mutedc" style="font-size:13px;margin:0 0 12px">Narrowing the range raises your share of in-range liquidity — more fees per unit of volume — but lowers the probability of staying in range at all. Both terms are shown separately rather than collapsed into one yield number that hides which side is driving it.</p>
+      <div class="scroll"><table>
+        <thead><tr><th>Range</th><th class="r">Liquidity concentration</th><th class="r">Est. time in range</th><th class="r">Est. fees</th><th class="r">LP vs HODL</th></tr></thead>
+        <tbody>${[2, 5, 10, 15, 25, 50].map((w) => {
+          const alt = simulate({ ...s, rangePct: w });
+          return `<tr${w === s.rangePct ? ' style="background:rgba(76,141,255,.06)"' : ""}>
+            <td>±${w}%</td><td class="r num">${alt.concentration.toFixed(1)}x</td>
+            <td class="r num">${(alt.timeInRange * 100).toFixed(0)}%</td>
+            <td class="r num pos">${alt.fees.toFixed(2)}</td>
+            <td class="r num ${alt.lpVsHodl < 0 ? "neg" : "pos"}">${alt.lpVsHodl >= 0 ? "+" : ""}${alt.lpVsHodl.toFixed(2)}</td></tr>`;
+        }).join("")}</tbody>
+      </table></div>
+      <p class="faintc" style="font-size:11px;margin:12px 0 0">Concentration is the capital-efficiency multiple of a ±w% range against full range. Time in range is a rough probability proxy from the width and the scenario move, not a volatility model — treat it as a shape, not a forecast.</p>
+    </div></div>
+  `;
+};
+
+/**
+ * Scenario maths. Uses the same amount formulas as live valuation, applied to a
+ * hypothetical price rather than the current one.
+ */
+function simulate(s) {
+  const P0 = 100;
+  const lower = P0 * (1 - s.rangePct / 100);
+  const upper = P0 * (1 + s.rangePct / 100);
+  const P1 = P0 * (1 + s.movePct / 100);
+
+  const sq = Math.sqrt;
+  // Liquidity for `capital` split at P0 across [lower, upper].
+  const L = s.capital / (2 * sq(P0) - sq(lower) - P0 / sq(upper));
+  const concentration = 1 / (1 - sq(lower / upper) ** 0.5) / 2;
+
+  const clamped = Math.min(Math.max(P1, lower), upper);
+  const endBase = L * (1 / sq(clamped) - 1 / sq(upper));
+  const endQuote = L * (sq(clamped) - sq(lower));
+  const lpValue = endBase * P1 + endQuote;
+
+  // HODL: the same split held, not rebalanced.
+  const startBase = L * (1 / sq(P0) - 1 / sq(upper));
+  const startQuote = L * (sq(P0) - sq(lower));
+  const hodlValue = startBase * P1 + startQuote;
+
+  // Rough in-range probability from width vs the scenario move.
+  const move = Math.abs(s.movePct) / 100;
+  const width = s.rangePct / 100;
+  const timeInRange = Math.max(0.02, Math.min(1, width / (width + move + 0.5 * width)));
+
+  const feeRate = s.feeTier / 1000000;
+  const shareOfPool = Math.min(1, s.capital * concentration / Math.max(1, s.volume * 2));
+  const fees = s.volume * feeRate * shareOfPool * timeInRange * s.days;
+
+  return {
+    concentration, timeInRange, endBase, endQuote, lpValue, hodlValue, fees,
+    divergence: lpValue - hodlValue,
+    lpVsHodl: lpValue + fees - hodlValue
+  };
+}
+
+/* ------------------------------------ Log ------------------------------ */
+SCREENS.log = () => {
+  const list = activePositions();
+  const rows = [];
+  for (const p of list) if (p.events) for (const e of p.events) rows.push({ ...e, p });
+  rows.sort((a, b) => b.block - a.block);
+
+  return `
+    ${pageHead("Transaction & Rebalance Log", "Every lifecycle event, so a decision can be reviewed later against what actually happened.")}
+    ${rows.length ? `<div class="card"><div class="bd pt"><div class="scroll"><table>
+      <thead><tr><th>Event</th><th>Position</th><th class="r">Block</th><th class="r hide-sm">Amounts</th><th class="r hide-sm">Tx</th></tr></thead>
+      <tbody>${rows.map((e) => `<tr>
+        <td><span class="badge ${e.type === "COLLECT_FEES" ? "pos" : e.type === "REMOVE_LIQUIDITY" ? "warn" : "ghost"}">${esc(e.type)}</span></td>
+        <td>${esc(e.p.pairLabel)} <span class="faintc mono" style="font-size:10px">#${esc(e.p.id)}</span></td>
+        <td class="r num">${e.block}</td>
+        <td class="r num hide-sm">${fmtAmount(e.amount0, e.p.token0.decimals)} ${esc(e.p.token0.symbol)} · ${fmtAmount(e.amount1, e.p.token1.decimals)} ${esc(e.p.token1.symbol)}</td>
+        <td class="r hide-sm"><a class="mono" href="${CHAIN.explorer}/tx/${esc(e.tx)}" target="_blank" rel="noreferrer noopener">${esc(truncHex(e.tx))}</a></td>
+      </tr>`).join("")}</tbody></table></div>
+      <p class="faintc" style="font-size:11px;margin:12px 0 0">Reconstructed from NonfungiblePositionManager events. Gas costs in fiat, your own reasoning notes, and rebalance pairing come from the server app.</p>
+    </div></div>`
+    : `<div class="empty"><p style="font-weight:500">No lifecycle events loaded</p>
+       <p class="mutedc" style="font-size:13px;max-width:52ch;margin:0 auto">Events come from <span class="mono">eth_getLogs</span> over the position manager. Many public endpoints reject a full-history query, in which case nothing is shown here rather than a partial list presented as complete.</p></div>`}
+  `;
+};
+
+/* ---------------------------------- Binance ---------------------------- */
+SCREENS.binance = () => `
+  ${pageHead("Binance Integration", "Public market data only in this file. Account access belongs on a server.")}
+  <div class="card" style="margin-bottom:18px;border-color:rgba(240,97,109,.25);background:rgba(240,97,109,.04)"><div class="bd pt">
+    <div style="font-weight:500;margin-bottom:8px" class="neg">Why account access is not in this file</div>
+    <p class="mutedc" style="font-size:13px;margin:0 0 8px">An API key and secret in a single HTML file would be readable by anyone who opens it, and any request from a browser exposes the key in the request itself. That is precisely the failure a read-only design exists to prevent.</p>
+    <ul class="mutedc" style="margin:0;padding-left:18px;font-size:13px;line-height:1.75">
+      <li>Credentials belong encrypted server-side, decrypted only inside a request handler.</li>
+      <li>Any key used must have <b>withdrawals disabled</b>; a key that can move money is refused outright.</li>
+      <li>No order endpoint and no withdrawal endpoint exists in either the server app or this file.</li>
+    </ul>
+  </div></div>
+
+  <div class="card" style="margin-bottom:18px"><div class="hd"><h3>Public market data</h3><span class="badge ghost">optional</span></div><div class="bd">
+    <p class="mutedc" style="font-size:13px;margin:0 0 12px">Spot marks need no credentials. Fetching them is a request to Binance from your browser, so it is opt-in rather than automatic.</p>
+    <button class="btn" id="fetch-marks">Fetch BTCUSDT / ETHUSDT marks</button>
+    <div id="marks" style="margin-top:14px"></div>
+  </div></div>
+
+  <div class="card"><div class="hd"><h3>Asset mapping</h3></div><div class="bd">
+    <div class="scroll"><table>
+      <thead><tr><th>Asset</th><th>Market</th><th class="r">Relationship</th></tr></thead>
+      <tbody>${Object.entries(TOKENS).map(([addr, t]) => `<tr>
+        <td><b>${esc(t.symbol)}</b> <span class="faintc mono hide-sm" style="font-size:10px">${esc(truncHex(addr, 8, 6))}</span></td>
+        <td class="mono">${t.binance ? esc(t.binance) : `<span class="faintc">none</span>`}</td>
+        <td class="r">${t.binance ? (t.proxy ? `<span class="badge warn">proxy — different asset</span>` : `<span class="badge pos">direct</span>`) : `<span class="badge ghost">unmapped</span>`}</td>
+      </tr>`).join("")}</tbody>
+    </table></div>
+    <p class="mutedc" style="font-size:12px;margin:14px 0 0"><b>cbBTC is not BTC.</b> It is a Coinbase-issued wrapper with issuer risk and a trading spread. Pricing it from BTCUSDT is an approximation, and the flag travels with the value to the screen. There is no rule like &ldquo;strip the leading W and append USDT&rdquo; — that heuristic is exactly how a tracker ends up pricing one asset as another without saying so.</p>
+    <p class="mutedc" style="font-size:12px;margin:8px 0 0">Stablecoins are mapped to a market rather than pinned to 1.00. Pinning fabricates value during a depeg — exactly when the number matters most.</p>
+  </div></div>
+`;
+
+/* ------------------------------- Data sources -------------------------- */
+SCREENS.sources = () => `
+  ${pageHead("Data Sources", "Where every number comes from, and whether that source is currently answering.")}
+  <div class="grid g2" style="margin-bottom:18px">
+    <div class="card"><div class="hd"><h3>Base Mainnet RPC</h3>
+      <div class="split">${state.chain.reachable === null ? `<span class="badge ghost">not probed</span>` : state.chain.reachable ? `<span class="badge pos">reachable</span>` : `<span class="badge neg">unreachable</span>`}
+      <button class="btn sm ghost" id="probe">recheck</button></div></div><div class="bd">
+      <dl class="rows">
+        <div><dt>Chain id</dt><dd>${CHAIN.id}</dd></div>
+        <div><dt>Endpoint</dt><dd class="mono" style="font-size:11px;overflow-wrap:anywhere">${esc(state.rpcUrl)}</dd></div>
+        <div><dt>Latest block</dt><dd>${state.chain.block ? esc(state.chain.block) : `<span class="faintc">N/A</span>`}</dd></div>
+        <div><dt>Latency</dt><dd>${state.chain.latencyMs !== null ? state.chain.latencyMs + " ms" : `<span class="faintc">N/A</span>`}</dd></div>
+        <div><dt>RPC calls this session</dt><dd>${rpcCallCount}</dd></div>
+      </dl>
+      ${state.chain.error ? `<div class="note neg" style="margin-top:12px"><b class="mono">${esc(state.chain.error.code)}</b><br />${esc(state.chain.error.message)}</div>` : ""}
+    </div></div>
+
+    <div class="card"><div class="hd"><h3>Storage</h3><span class="badge warn">browser only</span></div><div class="bd">
+      <p class="mutedc" style="font-size:13px;margin:0 0 10px">This file has no database. What persists lives in this browser's localStorage:</p>
+      <dl class="rows">
+        <div><dt>Mode, endpoint, address</dt><dd class="pos">stored</dd></div>
+        <div><dt>Thresholds</dt><dd class="pos">stored</dd></div>
+        <div><dt>Manual entry bases</dt><dd class="pos">stored</dd></div>
+        <div><dt>Snapshot history</dt><dd class="faintc">not stored</dd></div>
+        <div><dt>Price history</dt><dd class="faintc">not stored</dd></div>
+      </dl>
+      <p class="faintc" style="font-size:11px;margin:10px 0 0">Clearing site data loses all of it. Nothing is sent anywhere.</p>
+    </div></div>
+  </div>
+
+  <div class="card" style="margin-bottom:18px"><div class="hd"><h3>Uniswap V3 contracts — Base</h3></div><div class="bd">
+    <div class="scroll"><table>
+      <thead><tr><th>Contract</th><th>Address</th></tr></thead>
+      <tbody>${Object.entries({ ...CHAIN.uniswapV3, multicall3: CHAIN.multicall3 }).map(([k, v]) => `<tr>
+        <td class="mutedc">${esc(k)}</td>
+        <td><a class="mono" style="font-size:11px" href="${CHAIN.explorer}/address/${esc(v)}" target="_blank" rel="noreferrer noopener">${esc(v)}</a></td>
+      </tr>`).join("")}</tbody>
+    </table></div>
+  </div></div>
+
+  <div class="card"><div class="hd"><h3>Asset registry — Base</h3></div><div class="bd">
+    <div class="scroll"><table>
+      <thead><tr><th>Symbol</th><th class="hide-sm">Address</th><th class="r">Decimals hint</th><th class="r">Market</th></tr></thead>
+      <tbody>${Object.entries(TOKENS).map(([addr, t]) => `<tr>
+        <td><b>${esc(t.symbol)}</b></td>
+        <td class="mono hide-sm" style="font-size:11px">${esc(addr)}</td>
+        <td class="r num faintc">${t.decimals}</td>
+        <td class="r">${t.binance ? `<span class="mono" style="font-size:11px">${esc(t.binance)}</span>${t.proxy ? ` <span class="badge warn">proxy</span>` : ""}` : `<span class="faintc">none</span>`}</td>
+      </tr>`).join("")}</tbody>
+    </table></div>
+    <p class="mutedc" style="font-size:12px;margin:14px 0 0">These decimals are <b>labelling hints only</b>. Every decimals used in arithmetic is read from the token contract during a scan — a wrong hard-coded value would scale every amount by a power of ten, so the maths never trusts this table.</p>
+  </div></div>
+`;
+
+/* ---------------------------------- Alerts ----------------------------- */
+SCREENS.alerts = () => {
+  const list = activePositions();
+  const firing = [];
+  for (const p of list) {
+    const r = rangeEngine(p, state.thresholds);
+    if (r.state === "OUT_BELOW" || r.state === "OUT_ABOVE") {
+      firing.push({ sev: "neg", title: "Out of range", body: p.pairLabel + " #" + p.id + " is " + RANGE_META[r.state].label.toLowerCase() + " and earning no fees." });
+    } else if (r.nearestEdgePct <= state.thresholds.criticalEdgePct) {
+      firing.push({ sev: "warn", title: "Very close to an edge", body: p.pairLabel + " #" + p.id + " is " + r.nearestEdgePct.toFixed(1) + "% from its nearest bound." });
+    } else if (r.nearestEdgePct <= state.thresholds.nearEdgePct) {
+      firing.push({ sev: "warn", title: r.state === "NEAR_LOWER" ? "Near lower bound" : "Near upper bound", body: p.pairLabel + " #" + p.id + " is " + r.nearestEdgePct.toFixed(1) + "% from its nearest bound." });
+    }
+    const hd = hodlEngine(p);
+    if (hd && hd.lpVsHodl < 0n) {
+      firing.push({ sev: "warn", title: "Behind HODL", body: p.pairLabel + " #" + p.id + " is " + fmtMoney(hd.lpVsHodl, p.unit, { signed: true }) + " against simply holding." });
+    }
+  }
+  if (state.mode === "live" && state.chain.reachable === false) {
+    firing.push({ sev: "neg", title: "Sync failure", body: "The RPC endpoint is not answering: " + state.chain.error.code + "." });
+  }
+
+  return `
+    ${pageHead("Alerts", "Conditions evaluated against the current read. Delivery and history need the server app.")}
+    ${firing.length ? `<div class="grid" style="margin-bottom:18px">${firing.map((a) => `<div class="card" style="border-color:${a.sev === "neg" ? "rgba(240,97,109,.25)" : "rgba(240,185,11,.25)"}"><div class="bd pt">
+      <div class="split" style="justify-content:space-between">
+        <div><span class="badge ${a.sev}">${a.sev === "neg" ? "critical" : "warning"}</span> <b style="margin-left:8px">${esc(a.title)}</b></div>
+        <span class="faintc" style="font-size:11px">evaluated just now</span>
+      </div>
+      <p class="mutedc" style="font-size:13px;margin:8px 0 0">${esc(a.body)}</p>
+    </div></div>`).join("")}</div>`
+    : `<div class="card" style="margin-bottom:18px;border-color:rgba(46,189,133,.2)"><div class="bd pt">
+        <span class="badge pos">nothing firing</span>
+        <p class="mutedc" style="font-size:13px;margin:10px 0 0">No condition is currently met across ${list.length} position${list.length === 1 ? "" : "s"}.</p>
+      </div></div>`}
+
+    <div class="card" style="margin-bottom:18px"><div class="hd"><h3>Conditions evaluated here</h3></div><div class="bd">
+      <dl class="rows">
+        <div><dt>Position near lower / upper bound</dt><dd class="pos">live</dd></div>
+        <div><dt>Out of range</dt><dd class="pos">live</dd></div>
+        <div><dt>LP vs HODL below threshold</dt><dd class="pos">live</dd></div>
+        <div><dt>Sync failure</dt><dd class="pos">live</dd></div>
+        <div><dt>Fees reach threshold</dt><dd class="faintc">needs a baseline over time</dd></div>
+        <div><dt>Fee APR below threshold</dt><dd class="faintc">needs a snapshot series</dd></div>
+        <div><dt>Price movement threshold</dt><dd class="faintc">needs a prior price</dd></div>
+      </dl>
+    </div></div>
+
+    ${needsServer("Delivery, cooldowns, and history",
+      "An alert is only useful if it reaches you when the page is closed. That needs a scheduler evaluating rules on stored snapshots, cooldowns so a price oscillating around a bound does not fire a hundred times, and a delivery record of what was sent.")}
+  `;
+};
+
+/* --------------------------------- Settings ---------------------------- */
+SCREENS.settings = () => `
+  ${pageHead("Settings", "Thresholds feed the range, rebalance, and alert engines directly. Stored in this browser.")}
+  <div class="grid g2" style="margin-bottom:18px">
+    <div class="card"><div class="hd"><h3>Range thresholds</h3></div><div class="bd">
+      <div class="grid g2" style="gap:12px">
+        <div><label class="fl">Safe distance from edge (%)</label><input class="mono" type="number" id="th-safe" value="${state.thresholds.safeEdgePct}" min="1" max="49" /></div>
+        <div><label class="fl">Near-edge warning (%)</label><input class="mono" type="number" id="th-near" value="${state.thresholds.nearEdgePct}" min="1" max="49" /></div>
+        <div><label class="fl">Critical edge (%)</label><input class="mono" type="number" id="th-crit" value="${state.thresholds.criticalEdgePct}" min="1" max="49" /></div>
+      </div>
+      <p class="faintc" style="font-size:11px;margin:12px 0 0">Measured as a share of the remaining distance across the range in tick space, not as a share of the price — ticks are linear in log-price, so this behaves correctly at both edges.</p>
+    </div></div>
+
+    <div class="card"><div class="hd"><h3>Rebalance economics</h3></div><div class="bd">
+      <div class="grid g2" style="gap:12px">
+        <div><label class="fl">Minimum position size</label><input class="mono" type="number" id="th-min" value="${state.thresholds.minPositionSize}" min="0" /></div>
+        <div><label class="fl">Estimated cost to rebalance</label><input class="mono" type="number" id="th-cost" value="${state.thresholds.estRebalanceCost}" min="0" step="0.5" /></div>
+      </div>
+      <p class="faintc" style="font-size:11px;margin:12px 0 0">Below the minimum size, gas dominates any yield improvement and the engine recommends EXIT REVIEW rather than REBALANCE.</p>
+    </div></div>
+  </div>
+
+  <div class="split" style="margin-bottom:22px"><button class="btn primary" id="save-th">Save thresholds</button><button class="btn ghost" id="reset-th">Reset to defaults</button></div>
+
+  <div class="card"><div class="hd"><h3>What this file is, and is not</h3></div><div class="bd">
+    <dl class="rows">
+      <div><dt>Position discovery, inventory, range state</dt><dd class="pos">full</dd></div>
+      <div><dt>Uncollected fees</dt><dd class="pos">full</dd></div>
+      <div><dt>LP vs HODL and divergence</dt><dd class="warnc">needs an entry basis</dd></div>
+      <div><dt>Rebalance recommendation</dt><dd class="pos">full</dd></div>
+      <div><dt>Simulation lab</dt><dd class="pos">full</dd></div>
+      <div><dt>Fee APR, time in range, 30/90/365</dt><dd class="faintc">server app</dd></div>
+      <div><dt>Portfolio chart over time</dt><dd class="faintc">server app</dd></div>
+      <div><dt>Binance account access</dt><dd class="faintc">server app</dd></div>
+      <div><dt>Background sync and alert delivery</dt><dd class="faintc">server app</dd></div>
+    </dl>
+  </div></div>
+`;
+
+function pageHead(title, sub) {
+  return `<h1>${esc(title)}</h1>${sub ? `<p class="sub">${esc(sub)}</p>` : `<div style="height:14px"></div>`}`;
+}
+
+/* =========================================================================
+   12. SHELL + RENDER
+   ========================================================================= */
+CHAIN.shortName = "Base";
+
+function icon(d) {
+  return `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="${d}"/></svg>`;
+}
+
+function shell(body) {
+  const groups = [...new Set(NAV.map((n) => n.group))];
+  const mobile = NAV.filter((n) => n.mobile);
+  return `
+  <div class="shell">
+    <aside class="side">
+      <div class="brand">
+        <span class="mark"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 12.5 6 7l3 3.2L14 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        <span><b>LP Command</b><span>Center</span></span>
+      </div>
+      <div class="navwrap">
+        ${groups.map((g) => `<div class="navgroup"><h6>${esc(g)}</h6>
+          ${NAV.filter((n) => n.group === g).map((n) => `<button class="nav ${state.route === n.id ? "on" : ""}" data-go="${n.id}">${icon(n.icon)}<span>${esc(n.label)}</span></button>`).join("")}
+        </div>`).join("")}
+      </div>
+      <div class="sidefoot">Read-only. This file never requests keys and cannot sign transactions.</div>
+    </aside>
+
+    <div class="main">
+      <header class="top">
+        <div class="split">
+          <span class="badge ghost hide-sm"><span class="dot" style="background:var(--info)"></span>Base · ${CHAIN.id}</span>
+          ${freshness()}
+        </div>
+        <div class="split">
+          <button class="btn sm ${state.mode === "demo" ? "" : "primary"}" id="mode-toggle">${state.mode === "demo" ? "DEMO MODE" : "LIVE MODE"}</button>
+        </div>
+      </header>
+      ${state.mode === "demo" ? `<div style="background:rgba(240,185,11,.07);border-bottom:1px solid rgba(240,185,11,.2);color:var(--warn);text-align:center;padding:8px 16px;font-size:12px">
+        <b>Demo mode.</b> A fixture position, computed by the same engine live mode uses. Switch to LIVE to read a real address.</div>` : ""}
+      <div class="content"><div class="inner">${body}</div></div>
+    </div>
+  </div>
+
+  <nav class="tabbar">
+    ${mobile.map((n) => `<button class="tab ${state.route === n.id ? "on" : ""}" data-go="${n.id}">${icon(n.icon)}<span>${esc(n.short || n.label)}</span></button>`).join("")}
+    <button class="tab ${!mobile.some((n) => n.id === state.route) ? "on" : ""}" id="more-btn">
+      ${icon("M5 12h.01M12 12h.01M19 12h.01")}<span>More</span></button>
+  </nav>`;
+}
+
+let DEMO_POSITIONS = [];
+
+function render() {
+  const screen = SCREENS[state.route] || SCREENS.overview;
+  let body;
+  try { body = screen(); }
+  catch (e) {
+    console.error(e);
+    body = `<div class="note neg"><b>This view could not be rendered.</b><br />${esc(e.message)}<br /><span class="faintc">No figures are shown rather than partial ones.</span></div>`;
+  }
+  document.getElementById("root").innerHTML = shell(body);
+  wire();
+}
+
+function wire() {
+  document.querySelectorAll("[data-go]").forEach((el) => {
+    el.addEventListener("click", () => { state.route = el.dataset.go; window.scrollTo(0, 0); render(); });
+  });
+  document.querySelectorAll("[data-detail]").forEach((el) => {
+    el.addEventListener("click", () => { state.detailId = el.dataset.detail; state.route = "detail"; window.scrollTo(0, 0); render(); });
+  });
+
+  const modeBtn = document.getElementById("mode-toggle");
+  if (modeBtn) modeBtn.addEventListener("click", () => {
+    state.mode = state.mode === "demo" ? "live" : "demo";
+    persist();
+    if (state.mode === "live" && state.chain.reachable === null) probeChain();
+    render();
+  });
+
+  const moreBtn = document.getElementById("more-btn");
+  if (moreBtn) moreBtn.addEventListener("click", () => { state.route = "sources"; render(); });
+
+  const addr = document.getElementById("addr");
+  if (addr) addr.addEventListener("input", () => { state.address = addr.value; state.addressError = null; persist(); });
+  const rpcurl = document.getElementById("rpcurl");
+  if (rpcurl) rpcurl.addEventListener("input", () => { state.rpcUrl = rpcurl.value.trim(); persist(); });
+
+  const scanBtn = document.getElementById("scanbtn");
+  if (scanBtn) scanBtn.addEventListener("click", () => {
+    if (state.mode !== "live") { state.mode = "live"; persist(); }
+    scan();
+  });
+
+  const probeBtn = document.getElementById("probe");
+  if (probeBtn) probeBtn.addEventListener("click", probeChain);
+
+  document.querySelectorAll("[data-save-entry]").forEach((el) => {
+    el.addEventListener("click", () => {
+      const id = el.dataset.saveEntry;
+      const p = activePositions().find((x) => x.id === id);
+      if (!p) return;
+      const parse = (v, dec) => {
+        const s = (v || "0").trim();
+        if (!/^\d*\.?\d*$/.test(s) || s === "" || s === ".") return 0n;
+        const [i, f = ""] = s.split(".");
+        return BigInt(i || "0") * pow10(dec) + BigInt((f + "0".repeat(dec)).slice(0, dec) || "0");
+      };
+      const a0 = parse(document.getElementById("entry0").value, p.token0.decimals);
+      const a1 = parse(document.getElementById("entry1").value, p.token1.decimals);
+      if (a0 === 0n && a1 === 0n) return;
+      p.entry = { amount0: a0, amount1: a1, source: "manual" };
+      saveEntryOverride(id, a0, a1);
+      render();
+    });
+  });
+
+  const save = document.getElementById("save-th");
+  if (save) save.addEventListener("click", () => {
+    const num = (id, fallback) => {
+      const v = Number(document.getElementById(id).value);
+      return Number.isFinite(v) && v >= 0 ? v : fallback;
+    };
+    state.thresholds = {
+      safeEdgePct: num("th-safe", DEFAULT_THRESHOLDS.safeEdgePct),
+      nearEdgePct: num("th-near", DEFAULT_THRESHOLDS.nearEdgePct),
+      criticalEdgePct: num("th-crit", DEFAULT_THRESHOLDS.criticalEdgePct),
+      minPositionSize: num("th-min", DEFAULT_THRESHOLDS.minPositionSize),
+      estRebalanceCost: num("th-cost", DEFAULT_THRESHOLDS.estRebalanceCost)
+    };
+    persist();
+    render();
+  });
+  const reset = document.getElementById("reset-th");
+  if (reset) reset.addEventListener("click", () => { state.thresholds = { ...DEFAULT_THRESHOLDS }; persist(); render(); });
+
+  ["sim-capital", "sim-fee", "sim-range", "sim-move", "sim-volume", "sim-days"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener("change", () => {
+      state.sim = {
+        capital: Number(document.getElementById("sim-capital").value) || 1000,
+        feeTier: Number(document.getElementById("sim-fee").value),
+        rangePct: Number(document.getElementById("sim-range").value),
+        movePct: Number(document.getElementById("sim-move").value),
+        volume: Number(document.getElementById("sim-volume").value) || 0,
+        days: Number(document.getElementById("sim-days").value)
+      };
+      render();
+    });
+  });
+
+  const marks = document.getElementById("fetch-marks");
+  if (marks) marks.addEventListener("click", async () => {
+    const box = document.getElementById("marks");
+    box.innerHTML = `<span class="faintc" style="font-size:12px">fetching…</span>`;
+    try {
+      const res = await fetch("https://api.binance.com/api/v3/ticker/price?symbols=%5B%22BTCUSDT%22%2C%22ETHUSDT%22%5D");
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
+      box.innerHTML = `<table><thead><tr><th>Market</th><th class="r">Price</th><th class="r">Read</th></tr></thead><tbody>
+        ${data.map((d) => `<tr><td class="mono">${esc(d.symbol)}</td><td class="r num">${esc(d.price)}</td>
+        <td class="r"><span class="badge pos">just now</span></td></tr>`).join("")}</tbody></table>
+        <p class="faintc" style="font-size:11px;margin:10px 0 0">Public endpoint, no credentials. Using these to mark cbBTC or WETH would be a <b>proxy</b> price and is flagged as such wherever it appears.</p>`;
+    } catch (e) {
+      box.innerHTML = `<div class="note neg"><b>Could not reach Binance.</b> ${esc(e.message)}<br />
+      This is usually a network block or a browser CORS restriction. No price is shown rather than a stale or invented one.</div>`;
+    }
+  });
+}
+
+/* =========================================================================
+   13. BOOT
+   ========================================================================= */
+try {
+  DEMO_POSITIONS = buildDemoPositions();
+} catch (e) {
+  console.error("fixture build failed", e);
+  DEMO_POSITIONS = [];
+}
+
+// Restore a manual entry basis onto demo positions too, if one was recorded.
+render();
+if (state.mode === "live") probeChain();
+</script>
+</body>
+</html>

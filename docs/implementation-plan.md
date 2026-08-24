@@ -140,6 +140,17 @@ a live network.
 
 ---
 
+## Companion: the standalone single-file terminal
+
+`standalone/lp-command-center.html` covers, in one dependency-free file, every
+phase that is derivable from a single chain read: discovery (3), valuation (4),
+uncollected fees (5), HODL benchmark (6), divergence (7), the range and
+rebalance engines (9), live alert conditions (12), and the simulation lab.
+
+It is a companion, not a replacement. Phases 8, 10, 11 and the durable parts of
+6 and 12 need a database, a scheduler, and server-held credentials. The file
+states that on the screens concerned instead of estimating.
+
 ## Working agreement
 
 - After every phase: `npm run lint`, `npm run typecheck`, `npm run test`,
