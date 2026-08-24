@@ -2,8 +2,8 @@ import type { Metadata } from 'next'
 import { ShieldCheck } from 'lucide-react'
 import { PageHeader } from '@/components/ui/section'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { PhasePlaceholder } from '@/components/data/empty-state'
 import { listChains } from '@/lib/chains/registry'
+import { WalletManager } from '@/components/wallets/wallet-manager'
 
 export const metadata: Metadata = { title: 'Wallets' }
 
@@ -63,16 +63,7 @@ export default function WalletsPage() {
         </CardContent>
       </Card>
 
-      <PhasePlaceholder
-        phase="Phase 2"
-        title="Add and sync a public address"
-        summary="Enter an address, and the system validates its EIP-55 checksum, reads its Base balances, and queues position discovery."
-        delivers={[
-          'EIP-55 checksum validation with a clear inline error — nothing is persisted on a bad address',
-          'Native ETH and ERC-20 balances read through Multicall3',
-          'Per-wallet sync state, last-synced timestamp, and any sync error surfaced rather than swallowed',
-        ]}
-      />
+      <WalletManager />
     </>
   )
 }

@@ -78,7 +78,9 @@ export function extractMessage(error: unknown): string {
   }
   if (typeof error === 'string') return error
   try {
-    return JSON.stringify(error)
+    // JSON.stringify returns `undefined` (not a string) for undefined, symbols,
+    // and functions. Callers do string work on this, so always hand back a string.
+    return JSON.stringify(error) ?? String(error)
   } catch {
     return String(error)
   }

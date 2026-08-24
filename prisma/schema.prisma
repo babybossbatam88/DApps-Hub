@@ -177,7 +177,11 @@ model Wallet {
   label        String?
   isActive     Boolean   @default(true)
   lastSyncedAt DateTime?
-  lastSyncError String?
+  /// Outcome of the most recent sync. PARTIAL is distinct from FAILED on
+  /// purpose: partial data is fresh and correct, just incomplete, and showing
+  /// it as an error trains the user to ignore real errors.
+  lastSyncStatus SyncJobStatus?
+  lastSyncError  String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

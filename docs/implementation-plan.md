@@ -27,16 +27,28 @@ Project architecture, UI shell, database, real Base RPC connection.
 **Exit criterion:** `npm run verify` green; every route reachable; `/api/chain/status`
 returns a real block number on an unrestricted network, or a structured error.
 
-## Phase 2 — Public wallet tracking 🔜
+## Phase 2 — Public wallet tracking ✅
 
-- Add/validate/remove a public EVM address (EIP-55 checksum, no signature)
-- Persist `Wallet`, resolve native + ERC-20 balances on Base
-- Wallets page with per-wallet sync state and last-synced timestamp
-- Sync job records in `SyncJob`
+- `normalizeEvmAddress`: EIP-55 validation that rejects a bad checksum rather
+  than lowercasing it away, names ENS specifically, and rejects the zero address
+- `POST/GET/DELETE /api/wallets` and `POST /api/wallets/:id/sync`
+- Native + ERC-20 balances read through Multicall3, every read pinned to one
+  block so a balance set is internally consistent
+- `decimals()` always read from the contract; a token whose `decimals()` reverts
+  is reported as a failure, never defaulted to 18
+- A genuine zero balance deletes its row rather than persisting a stale "0.00"
+- `SyncJob` written for every attempt, including failures
+- `Wallet.lastSyncStatus` separates PARTIAL (fresh but incomplete) from FAILED
+- Wallets page: inline validation, per-wallet freshness, block number, and
+  per-token failure reasons
 
-**Exit:** a real Base address can be added and its balances shown with sources.
+**Exit:** ✅ a public address can be added and its balances shown with sources
+and a block number. Verified end to end against real PostgreSQL. The chain reads
+were verified against a local JSON-RPC test double (`scripts/mock-base-rpc.mjs`)
+because this build sandbox blocks RPC egress; the same path against Base mainnet
+needs one run on an unrestricted network.
 
-## Phase 3 — Uniswap V3 position discovery ⬜
+## Phase 3 — Uniswap V3 position discovery 🔜
 
 - `NonfungiblePositionManager` enumeration → `positions()` → factory → pool
 - Token metadata resolution and `Token` upsert (on-chain `decimals`, always)

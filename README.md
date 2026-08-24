@@ -19,13 +19,14 @@ is built so Uniswap V4 and further chains are additions, not rewrites.
 
 ---
 
-## Current status — Phase 1 of 13 complete
+## Current status — Phase 2 of 13 complete
 
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | Architecture, UI shell, database, real Base RPC connection | ✅ |
-| 2 | Public wallet tracking | next |
-| 3–7 | Position discovery, valuation, fees, HODL benchmark, divergence | planned |
+| 2 | Public wallet tracking — add, validate, sync balances | ✅ |
+| 3 | Uniswap V3 position discovery | next |
+| 4–7 | Valuation, fees, HODL benchmark, divergence | planned |
 | 8–13 | Snapshots, rebalance engine, Binance, alerts, hardening | planned |
 
 Full breakdown with exit criteria: [`docs/implementation-plan.md`](docs/implementation-plan.md).
@@ -40,8 +41,19 @@ indistinguishable from a bug, and this is a tool for making money decisions.
 npm install
 cp .env.example .env.local     # set DATABASE_URL, DIRECT_URL, BASE_RPC_URLS
 npx prisma generate
-npx prisma migrate dev --name init
+npx prisma migrate deploy    # migrations are committed under prisma/migrations
 npm run dev
+```
+
+### Working without a Base RPC endpoint
+
+`scripts/mock-base-rpc.mjs` is a local JSON-RPC **test double** for development
+on a machine that cannot reach a node. It is a fixture, never a data source, and
+nothing in `src/` can reach it — pointing at it is an explicit act:
+
+```bash
+node scripts/mock-base-rpc.mjs 8545
+# then set BASE_RPC_URLS=http://127.0.0.1:8545 in .env.local
 ```
 
 Verify the wiring rather than trusting it:

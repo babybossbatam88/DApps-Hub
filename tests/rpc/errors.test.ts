@@ -60,4 +60,13 @@ describe('extractMessage', () => {
     expect(extractMessage('plain string')).toBe('plain string')
     expect(extractMessage({ a: 1 })).toBe('{"a":1}')
   })
+
+  it('always returns a string, including for values JSON cannot encode', () => {
+    // JSON.stringify(undefined) is `undefined`, not a string. Callers do string
+    // work on this result, so returning undefined crashes the error path — the
+    // one path that must never crash.
+    for (const value of [undefined, null, 42, () => {}, Symbol('x')]) {
+      expect(typeof extractMessage(value)).toBe('string')
+    }
+  })
 })
