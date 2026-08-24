@@ -1,0 +1,106 @@
+@import 'tailwindcss';
+
+/* ==========================================================================
+   LP COMMAND CENTER — design tokens
+   Dark-first institutional terminal. Colour carries meaning and nothing else:
+   green = positive / in range, red = loss / out of range, amber = warning,
+   blue = neutral market data. Nothing is coloured for decoration.
+   ========================================================================== */
+
+@theme {
+  /* Surfaces — near-black deep navy, layered by elevation */
+  --color-terminal-void: #05070d;
+  --color-terminal-base: #080b14;
+  --color-terminal-surface: #0e1320;
+  --color-terminal-raised: #141a2a;
+  --color-terminal-overlay: #1a2133;
+
+  /* Lines */
+  --color-terminal-border: #1e2637;
+  --color-terminal-border-strong: #2c3650;
+
+  /* Text */
+  --color-terminal-fg: #e8ecf5;
+  --color-terminal-muted: #8b95ab;
+  --color-terminal-faint: #5b6479;
+
+  /* Semantics */
+  --color-signal-positive: #2ebd85;
+  --color-signal-positive-dim: #17694c;
+  --color-signal-negative: #f0616d;
+  --color-signal-negative-dim: #7d2e35;
+  --color-signal-warning: #f0b90b;
+  --color-signal-neutral: #4c8dff;
+
+  --radius-card: 16px;
+
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: var(--font-mono-stack), ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background-color: var(--color-terminal-base);
+  color: var(--color-terminal-fg);
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Tabular figures everywhere numbers are compared vertically. Without this,
+   a column of prices jitters as digits change width and becomes hard to scan. */
+.font-mono,
+.tabular {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--color-signal-neutral) 35%, transparent);
+}
+
+/* Scrollbars styled to disappear into the terminal rather than punch a hole. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-terminal-border-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-terminal-border-strong);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+.animate-pulse-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+/* Focus is always visible — this is a financial tool, keyboard users included. */
+:focus-visible {
+  outline: 2px solid var(--color-signal-neutral);
+  outline-offset: 2px;
+  border-radius: 4px;
+}

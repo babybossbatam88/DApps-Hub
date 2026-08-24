@@ -1,0 +1,665 @@
+// LP Command Center — database schema
+// Design rationale lives in docs/schema.md
+//
+// HARD RULE: there is no column anywhere in this file for a private key, a seed
+// phrase, or a plaintext API secret. Wallets are public addresses only.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+// Connection URLs live in prisma.config.ts (Prisma 7). The runtime client is
+// constructed with a driver adapter in src/lib/db/prisma.ts.
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum PositionStatus {
+  ACTIVE
+  OUT_OF_RANGE
+  CLOSED
+  BURNED
+  UNKNOWN
+}
+
+enum RangeState {
+  IN_RANGE_SAFE
+  NEAR_LOWER
+  NEAR_UPPER
+  OUT_BELOW
+  OUT_ABOVE
+  UNKNOWN
+}
+
+enum PriceSource {
+  ONCHAIN_POOL
+  BINANCE
+  DERIVED
+  FIXTURE
+}
+
+enum DataConfidence {
+  VERY_LOW
+  LOW
+  MEDIUM
+  HIGHER
+}
+
+enum FeeEventKind {
+  ACCRUAL_OBSERVED
+  COLLECTED
+}
+
+enum LifecycleEventType {
+  CREATE_POSITION
+  ADD_LIQUIDITY
+  REMOVE_LIQUIDITY
+  COLLECT_FEES
+  REBALANCE
+  CLOSE_POSITION
+}
+
+enum SnapshotGranularity {
+  RAW
+  HOURLY
+  DAILY
+}
+
+enum SyncJobKind {
+  WALLET_BALANCES
+  POSITION_DISCOVERY
+  POSITION_VALUATION
+  FEE_SYNC
+  PRICE_SYNC
+  SNAPSHOT
+  BINANCE_ACCOUNT
+  ALERT_EVALUATION
+}
+
+enum SyncJobStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  PARTIAL
+  FAILED
+}
+
+enum AlertType {
+  NEAR_LOWER_BOUND
+  NEAR_UPPER_BOUND
+  OUT_OF_RANGE
+  FEES_THRESHOLD
+  FEE_APR_BELOW
+  LP_VS_HODL_BELOW
+  PRICE_MOVE
+  SYNC_FAILURE
+}
+
+enum AlertChannel {
+  IN_APP
+  EMAIL
+  TELEGRAM
+  WHATSAPP
+}
+
+enum ConnectionStatus {
+  PENDING
+  OK
+  ERROR
+  UNSAFE_PERMISSIONS
+  DISABLED
+}
+
+enum TransactionStatus {
+  SUCCESS
+  REVERTED
+  PENDING
+  UNKNOWN
+}
+
+// ---------------------------------------------------------------------------
+// Identity
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  // argon2id hash. Null when the account uses magic-link only.
+  passwordHash String?
+  displayName  String?
+  timezone     String   @default("UTC")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  wallets            Wallet[]
+  binanceConnections BinanceConnection[]
+  alerts             Alert[]
+  syncJobs           SyncJob[]
+  settings           UserSettings?
+
+  @@map("users")
+}
+
+/// Per-user configurable thresholds. Defaults mirror lib/config/thresholds.ts.
+model UserSettings {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  nearEdgePercent      Decimal @default(15) @db.Decimal(18, 8)
+  criticalEdgePercent  Decimal @default(5) @db.Decimal(18, 8)
+  safeEdgePercent      Decimal @default(20) @db.Decimal(18, 8)
+  minPositionSizeUsd   Decimal @default(500) @db.Decimal(36, 18)
+  preferredCurrency    String  @default("USD")
+  snapshotIntervalMins Int     @default(15)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("user_settings")
+}
+
+/// A PUBLIC EVM address the user wants tracked. Read-only: no key material.
+model Wallet {
+  id      String @id @default(cuid())
+  userId  String
+  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chainId Int
+  chain   Chain  @relation(fields: [chainId], references: [chainId])
+
+  /// EIP-55 checksummed address.
+  address      String
+  label        String?
+  isActive     Boolean   @default(true)
+  lastSyncedAt DateTime?
+  lastSyncError String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  positions LPPosition[]
+  balances  WalletBalance[]
+
+  @@unique([userId, chainId, address])
+  @@index([userId, isActive])
+  @@map("wallets")
+}
+
+model WalletBalance {
+  id       String @id @default(cuid())
+  walletId String
+  wallet   Wallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  tokenId  String
+  token    Token  @relation(fields: [tokenId], references: [id])
+
+  /// Raw base units (uint256) — 78 digits covers 2^256.
+  rawAmount   Decimal  @db.Decimal(78, 0)
+  usdValue    Decimal? @db.Decimal(36, 18)
+  blockNumber BigInt?
+  observedAt  DateTime @default(now())
+
+  @@unique([walletId, tokenId])
+  @@index([walletId])
+  @@map("wallet_balances")
+}
+
+// ---------------------------------------------------------------------------
+// Registries
+// ---------------------------------------------------------------------------
+
+model Chain {
+  chainId      Int     @id
+  key          String  @unique
+  name         String
+  nativeSymbol String
+  nativeDecimals Int   @default(18)
+  explorerUrl  String
+  isEnabled    Boolean @default(true)
+
+  createdAt DateTime @default(now())
+
+  wallets   Wallet[]
+  tokens    Token[]
+  pools     Pool[]
+  positions LPPosition[]
+
+  @@map("chains")
+}
+
+model Protocol {
+  id        String  @id @default(cuid())
+  /// Stable machine key, e.g. "uniswap-v3".
+  key       String  @unique
+  name      String
+  version   String
+  isEnabled Boolean @default(true)
+
+  createdAt DateTime @default(now())
+
+  pools     Pool[]
+  positions LPPosition[]
+
+  @@map("protocols")
+}
+
+model Token {
+  id      String @id @default(cuid())
+  chainId Int
+  chain   Chain  @relation(fields: [chainId], references: [chainId])
+
+  address  String
+  symbol   String
+  name     String
+  /// Authoritative only when `verified` is true; arithmetic always uses the
+  /// on-chain value read during sync.
+  decimals Int
+
+  /// True once symbol/name/decimals were read from the token contract.
+  verified      Boolean @default(false)
+  isStablecoin  Boolean @default(false)
+  /// Explicit market mapping. cbBTC -> BTCUSDT is a PROXY, never a direct price.
+  binanceSymbol String?
+  isProxyPriced Boolean @default(false)
+  coingeckoId   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  poolsAsToken0    Pool[]          @relation("PoolToken0")
+  poolsAsToken1    Pool[]          @relation("PoolToken1")
+  positionsAsToken0 LPPosition[]   @relation("PositionToken0")
+  positionsAsToken1 LPPosition[]   @relation("PositionToken1")
+  priceSnapshots   PriceSnapshot[]
+  walletBalances   WalletBalance[]
+
+  @@unique([chainId, address])
+  @@index([chainId, symbol])
+  @@map("tokens")
+}
+
+model Pool {
+  id         String   @id @default(cuid())
+  chainId    Int
+  chain      Chain    @relation(fields: [chainId], references: [chainId])
+  protocolId String
+  protocol   Protocol @relation(fields: [protocolId], references: [id])
+
+  address     String
+  token0Id    String
+  token0      Token  @relation("PoolToken0", fields: [token0Id], references: [id])
+  token1Id    String
+  token1      Token  @relation("PoolToken1", fields: [token1Id], references: [id])
+  /// Hundredths of a bip: 500 = 0.05%, 3000 = 0.30%, 10000 = 1.00%.
+  feeTier     Int
+  tickSpacing Int
+
+  /// Latest observed pool state — a cache, always carrying its block number.
+  lastSqrtPriceX96 String?
+  lastTick         Int?
+  lastLiquidity    String?
+  lastBlockNumber  BigInt?
+  lastObservedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  positions LPPosition[]
+
+  @@unique([chainId, address])
+  @@index([chainId, protocolId])
+  @@map("pools")
+}
+
+// ---------------------------------------------------------------------------
+// Positions
+// ---------------------------------------------------------------------------
+
+model LPPosition {
+  id         String   @id @default(cuid())
+  walletId   String
+  wallet     Wallet   @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  protocolId String
+  protocol   Protocol @relation(fields: [protocolId], references: [id])
+  chainId    Int
+  chain      Chain    @relation(fields: [chainId], references: [chainId])
+  poolId     String
+  pool       Pool     @relation(fields: [poolId], references: [id])
+
+  /// Denormalised for list queries that avoid the pool join.
+  poolAddress String
+  /// uint256 NFT id — stored as string, never as a JS number.
+  positionNftId String
+
+  token0Id String
+  token0   Token  @relation("PositionToken0", fields: [token0Id], references: [id])
+  token1Id String
+  token1   Token  @relation("PositionToken1", fields: [token1Id], references: [id])
+
+  feeTier   Int
+  tickLower Int
+  tickUpper Int
+
+  entryTimestamp DateTime
+
+  /// Raw base units contributed at entry (immutable basis for HODL).
+  initialToken0 Decimal @db.Decimal(78, 0)
+  initialToken1 Decimal @db.Decimal(78, 0)
+  initialToken0PriceUsd Decimal? @db.Decimal(36, 18)
+  initialToken1PriceUsd Decimal? @db.Decimal(36, 18)
+  initialCapitalUsd     Decimal? @db.Decimal(36, 18)
+
+  /// Raw uint128.
+  currentLiquidity String @default("0")
+
+  status     PositionStatus @default(UNKNOWN)
+  rangeState RangeState     @default(UNKNOWN)
+
+  lastSyncedAt  DateTime?
+  lastSyncError String?
+  closedAt      DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  entrySnapshot   PositionEntrySnapshot?
+  snapshots       PositionSnapshot[]
+  feeEvents       FeeEvent[]
+  rebalanceEvents RebalanceEvent[]
+  transactions    Transaction[]
+  alerts          Alert[]
+
+  @@unique([chainId, protocolId, positionNftId])
+  @@index([walletId, status])
+  @@index([poolId])
+  @@map("lp_positions")
+}
+
+/// WRITE-ONCE. The HODL benchmark rests on this row; application code must never
+/// UPDATE it. A correction is a new position record, not a rewritten basis.
+model PositionEntrySnapshot {
+  id         String     @id @default(cuid())
+  positionId String     @unique
+  position   LPPosition @relation(fields: [positionId], references: [id], onDelete: Cascade)
+
+  entryTimestamp DateTime
+  blockNumber    BigInt?
+  txHash         String?
+
+  token0RawAmount Decimal @db.Decimal(78, 0)
+  token1RawAmount Decimal @db.Decimal(78, 0)
+  token0Decimals  Int
+  token1Decimals  Int
+
+  token0PriceUsd       Decimal?     @db.Decimal(36, 18)
+  token1PriceUsd       Decimal?     @db.Decimal(36, 18)
+  token0PriceSource    PriceSource?
+  token1PriceSource    PriceSource?
+  token0PriceIsProxy   Boolean      @default(false)
+  token1PriceIsProxy   Boolean      @default(false)
+
+  initialCapitalUsd Decimal? @db.Decimal(36, 18)
+  sqrtPriceX96      String?
+  tick              Int?
+
+  createdAt DateTime @default(now())
+
+  @@map("position_entry_snapshots")
+}
+
+model PositionSnapshot {
+  id         String     @id @default(cuid())
+  positionId String
+  position   LPPosition @relation(fields: [positionId], references: [id], onDelete: Cascade)
+
+  takenAt     DateTime
+  granularity SnapshotGranularity @default(RAW)
+  blockNumber BigInt?
+
+  sqrtPriceX96 String?
+  tick         Int?
+  /// Human-unit price of token0 denominated in token1.
+  price        Decimal? @db.Decimal(48, 18)
+
+  amount0 Decimal @db.Decimal(78, 0)
+  amount1 Decimal @db.Decimal(78, 0)
+
+  uncollectedFees0 Decimal @default(0) @db.Decimal(78, 0)
+  uncollectedFees1 Decimal @default(0) @db.Decimal(78, 0)
+
+  positionValueUsd   Decimal? @db.Decimal(36, 18)
+  uncollectedFeesUsd Decimal? @db.Decimal(36, 18)
+  hodlValueUsd       Decimal? @db.Decimal(36, 18)
+  lpVsHodlUsd        Decimal? @db.Decimal(36, 18)
+  lpVsHodlPercent    Decimal? @db.Decimal(18, 8)
+  divergenceExFeesUsd Decimal? @db.Decimal(36, 18)
+
+  rangeState RangeState  @default(UNKNOWN)
+  source     PriceSource @default(ONCHAIN_POOL)
+  isPending  Boolean     @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([positionId, takenAt(sort: Desc)])
+  @@index([granularity, takenAt(sort: Desc)])
+  @@map("position_snapshots")
+}
+
+model FeeEvent {
+  id         String     @id @default(cuid())
+  positionId String
+  position   LPPosition @relation(fields: [positionId], references: [id], onDelete: Cascade)
+
+  kind FeeEventKind
+
+  amount0  Decimal  @db.Decimal(78, 0)
+  amount1  Decimal  @db.Decimal(78, 0)
+  usdValue Decimal? @db.Decimal(36, 18)
+
+  /// Null for ACCRUAL_OBSERVED rows — nothing was transferred.
+  txHash      String?
+  blockNumber BigInt?
+  observedAt  DateTime
+
+  createdAt DateTime @default(now())
+
+  @@index([positionId, observedAt(sort: Desc)])
+  @@index([positionId, kind])
+  @@map("fee_events")
+}
+
+model RebalanceEvent {
+  id         String     @id @default(cuid())
+  positionId String
+  position   LPPosition @relation(fields: [positionId], references: [id], onDelete: Cascade)
+
+  type      LifecycleEventType
+  occurredAt DateTime
+
+  oldTickLower Int?
+  oldTickUpper Int?
+  newTickLower Int?
+  newTickUpper Int?
+
+  amount0 Decimal? @db.Decimal(78, 0)
+  amount1 Decimal? @db.Decimal(78, 0)
+  usdValue Decimal? @db.Decimal(36, 18)
+
+  feesCollected0   Decimal? @db.Decimal(78, 0)
+  feesCollected1   Decimal? @db.Decimal(78, 0)
+  feesCollectedUsd Decimal? @db.Decimal(36, 18)
+
+  gasCostUsd Decimal? @db.Decimal(36, 18)
+
+  reason String?
+  notes  String?
+
+  transactionId String?
+  transaction   Transaction? @relation(fields: [transactionId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([positionId, occurredAt(sort: Desc)])
+  @@map("rebalance_events")
+}
+
+model Transaction {
+  id      String @id @default(cuid())
+  chainId Int
+
+  txHash      String
+  blockNumber BigInt?
+  fromAddress String
+  toAddress   String?
+
+  gasUsed     Decimal? @db.Decimal(78, 0)
+  gasPriceWei Decimal? @db.Decimal(78, 0)
+  gasCostUsd  Decimal? @db.Decimal(36, 18)
+
+  methodSignature String?
+  status          TransactionStatus @default(UNKNOWN)
+  occurredAt      DateTime
+
+  positionId String?
+  position   LPPosition? @relation(fields: [positionId], references: [id], onDelete: SetNull)
+
+  rebalanceEvents RebalanceEvent[]
+
+  createdAt DateTime @default(now())
+
+  @@unique([chainId, txHash])
+  @@index([positionId, occurredAt(sort: Desc)])
+  @@map("transactions")
+}
+
+// ---------------------------------------------------------------------------
+// Market data
+// ---------------------------------------------------------------------------
+
+model PriceSnapshot {
+  id      String @id @default(cuid())
+  tokenId String
+  token   Token  @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+
+  priceUsd   Decimal        @db.Decimal(36, 18)
+  source     PriceSource
+  /// True when derived from a proxy market (e.g. cbBTC priced from BTCUSDT).
+  isProxy    Boolean        @default(false)
+  confidence DataConfidence @default(MEDIUM)
+  observedAt DateTime
+
+  createdAt DateTime @default(now())
+
+  @@index([tokenId, observedAt(sort: Desc)])
+  @@map("price_snapshots")
+}
+
+// ---------------------------------------------------------------------------
+// Integrations
+// ---------------------------------------------------------------------------
+
+/// Binance API credentials. AES-256-GCM ciphertext only — plaintext never
+/// touches the database and never reaches a client component.
+model BinanceConnection {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  label String @default("Binance")
+
+  apiKeyCiphertext    String
+  apiSecretCiphertext String
+  encryptionIv        String
+  encryptionTag       String
+  keyVersion          Int    @default(1)
+
+  /// Last observed scopes from GET /sapi/v1/account/apiRestrictions.
+  permissionsJson      Json?
+  readEnabled          Boolean? 
+  spotTradingEnabled   Boolean?
+  /// MUST be false. True marks the connection UNSAFE_PERMISSIONS and blocks sync.
+  withdrawalsEnabled   Boolean?
+  ipRestricted         Boolean?
+
+  status        ConnectionStatus @default(PENDING)
+  lastCheckedAt DateTime?
+  lastError     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@map("binance_connections")
+}
+
+// ---------------------------------------------------------------------------
+// Operations
+// ---------------------------------------------------------------------------
+
+model Alert {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  positionId String?
+  position   LPPosition? @relation(fields: [positionId], references: [id], onDelete: Cascade)
+
+  type      AlertType
+  /// Rule parameters, e.g. { "percent": 5 } or { "usd": 25 }.
+  threshold Json
+  channel   AlertChannel @default(IN_APP)
+  isEnabled Boolean      @default(true)
+
+  lastTriggeredAt DateTime?
+  cooldownMinutes Int       @default(60)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  deliveries AlertDelivery[]
+
+  @@index([userId, isEnabled])
+  @@index([positionId])
+  @@map("alerts")
+}
+
+model AlertDelivery {
+  id      String @id @default(cuid())
+  alertId String
+  alert   Alert  @relation(fields: [alertId], references: [id], onDelete: Cascade)
+
+  channel     AlertChannel
+  message     String
+  contextJson Json?
+  deliveredAt DateTime     @default(now())
+  readAt      DateTime?
+
+  @@index([alertId, deliveredAt(sort: Desc)])
+  @@map("alert_deliveries")
+}
+
+model SyncJob {
+  id     String  @id @default(cuid())
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  kind   SyncJobKind
+  /// Wallet id, position id, or null for global jobs.
+  targetId String?
+  status   SyncJobStatus @default(PENDING)
+
+  startedAt      DateTime  @default(now())
+  finishedAt     DateTime?
+  itemsProcessed Int       @default(0)
+  itemsFailed    Int       @default(0)
+  error          String?
+  detailsJson    Json?
+
+  @@index([status, startedAt(sort: Desc)])
+  @@index([kind, startedAt(sort: Desc)])
+  @@map("sync_jobs")
+}
