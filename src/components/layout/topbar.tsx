@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { ModeIndicator } from './mode-indicator'
 import { ChainStatusPill } from './chain-status-pill'
+import { ThemeToggle } from './theme-toggle'
 
 export function Topbar() {
   return (
@@ -37,6 +38,7 @@ export function Topbar() {
         >
           Data sources
         </Link>
+        <ThemeToggle />
         <ModeIndicator compact />
       </div>
     </header>

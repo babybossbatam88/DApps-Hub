@@ -23,12 +23,13 @@ export default function PositionsPage() {
       <Card className="mb-6">
         <CardContent className="pt-5">
           <p className="text-[11px] font-semibold tracking-[0.12em] text-terminal-faint uppercase">
-            Established by discovery
+            Live now
           </p>
           <div className="mt-3 flex flex-wrap gap-1.5">
             {[
-              'Pair', 'Protocol', 'Version', 'Chain', 'Fee tier', 'Tick bounds',
-              'Lower / upper price', 'Range width', 'Liquidity', 'Entry basis', 'Last synced',
+              'Pair', 'Protocol', 'Chain', 'Fee tier', 'Tick bounds', 'Lower / upper price',
+              'Range width', 'Liquidity', 'Entry basis', 'Current price', 'Range state',
+              'Token amounts', 'Position value', 'Allocation', 'Block read',
             ].map((field) => (
               <Badge key={field} variant="outline">
                 {field}
@@ -40,7 +41,6 @@ export default function PositionsPage() {
           </p>
           <div className="mt-3 flex flex-wrap gap-1.5">
             {[
-              'Current price (4)', 'Token amounts (4)', 'Position value (4)',
               'Uncollected fees (5)', 'Fee APR (5)', 'LP vs HODL (6)', 'Divergence (7)',
               'Time in range (8)', 'Rebalance signal (9)',
             ].map((field) => (
@@ -49,6 +49,11 @@ export default function PositionsPage() {
               </Badge>
             ))}
           </div>
+          <p className="mt-3 text-[11px] text-terminal-faint">
+            Values are in the pool&rsquo;s quote token, not dollars. The pool prices one token in
+            the other and says nothing about what either is worth in USD — a currency arrives with
+            the Binance provider in Phase 10.
+          </p>
         </CardContent>
       </Card>
 

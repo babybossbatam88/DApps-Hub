@@ -2,35 +2,45 @@
 
 /* ==========================================================================
    LP COMMAND CENTER — design tokens
-   Dark-first institutional terminal. Colour carries meaning and nothing else:
-   green = positive / in range, red = loss / out of range, amber = warning,
-   blue = neutral market data. Nothing is coloured for decoration.
+
+   Two themes, both first-class. Light is the default; dark is a deliberate
+   choice, persisted per browser.
+
+   Colour carries meaning and nothing else: green = positive / in range,
+   red = loss / out of range, amber = warning, blue = neutral market data.
+   Nothing is coloured for decoration.
+
+   The token NAMES are shared across themes and describe ELEVATION, not
+   lightness — `void` is the deepest chrome, `base` the page, `surface` a card,
+   `raised` a subtle fill. In dark that ladder runs darker; in light it runs
+   lighter. Tailwind emits these as custom properties, so overriding them under
+   [data-theme] re-themes every utility without touching a single class name.
    ========================================================================== */
 
 @theme {
-  /* Surfaces — near-black deep navy, layered by elevation */
-  --color-terminal-void: #05070d;
-  --color-terminal-base: #080b14;
-  --color-terminal-surface: #0e1320;
-  --color-terminal-raised: #141a2a;
-  --color-terminal-overlay: #1a2133;
+  /* ---- LIGHT (default) ---- */
+  --color-terminal-void: #ffffff;
+  --color-terminal-base: #f6f7fa;
+  --color-terminal-surface: #ffffff;
+  --color-terminal-raised: #f1f3f8;
+  --color-terminal-overlay: #e7ebf3;
 
-  /* Lines */
-  --color-terminal-border: #1e2637;
-  --color-terminal-border-strong: #2c3650;
+  --color-terminal-border: #e4e8f0;
+  --color-terminal-border-strong: #ccd3e0;
 
-  /* Text */
-  --color-terminal-fg: #e8ecf5;
-  --color-terminal-muted: #8b95ab;
-  --color-terminal-faint: #5b6479;
+  --color-terminal-fg: #101827;
+  --color-terminal-muted: #56607a;
+  --color-terminal-faint: #8892a6;
 
-  /* Semantics */
-  --color-signal-positive: #2ebd85;
-  --color-signal-positive-dim: #17694c;
-  --color-signal-negative: #f0616d;
-  --color-signal-negative-dim: #7d2e35;
-  --color-signal-warning: #f0b90b;
-  --color-signal-neutral: #4c8dff;
+  /* Semantic colours are DARKER in light mode. The dark-theme green (#2ebd85)
+     fails contrast on white; these are chosen to pass AA on the surface colour
+     above, because a P/L figure nobody can read is worse than no figure. */
+  --color-signal-positive: #067a52;
+  --color-signal-positive-dim: #b7e4d1;
+  --color-signal-negative: #c31f36;
+  --color-signal-negative-dim: #f6ccd2;
+  --color-signal-warning: #8a6100;
+  --color-signal-neutral: #2361d8;
 
   --radius-card: 16px;
 
@@ -38,8 +48,41 @@
   --font-mono: var(--font-mono-stack), ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
 }
 
+/* ---- DARK ---- */
+:root[data-theme='dark'] {
+  --color-terminal-void: #05070d;
+  --color-terminal-base: #080b14;
+  --color-terminal-surface: #0e1320;
+  --color-terminal-raised: #141a2a;
+  --color-terminal-overlay: #1a2133;
+
+  --color-terminal-border: #1e2637;
+  --color-terminal-border-strong: #2c3650;
+
+  --color-terminal-fg: #e8ecf5;
+  --color-terminal-muted: #8b95ab;
+  --color-terminal-faint: #5b6479;
+
+  --color-signal-positive: #2ebd85;
+  --color-signal-positive-dim: #17694c;
+  --color-signal-negative: #f0616d;
+  --color-signal-negative-dim: #7d2e35;
+  --color-signal-warning: #f0b90b;
+  --color-signal-neutral: #4c8dff;
+}
+
 :root {
+  color-scheme: light;
+}
+:root[data-theme='dark'] {
   color-scheme: dark;
+}
+
+/* Leave room for the sticky header and the fixed mobile tab bar, so anything
+   scrolled into view lands in the readable band rather than under chrome. */
+html {
+  scroll-padding-top: 68px;
+  scroll-padding-bottom: 84px;
 }
 
 html,
@@ -63,10 +106,10 @@ body {
 }
 
 ::selection {
-  background: color-mix(in oklab, var(--color-signal-neutral) 35%, transparent);
+  background: color-mix(in oklab, var(--color-signal-neutral) 22%, transparent);
 }
 
-/* Scrollbars styled to disappear into the terminal rather than punch a hole. */
+/* Scrollbars styled to recede into the page rather than punch a hole in it. */
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--color-terminal-border-strong) transparent;
@@ -103,4 +146,25 @@ body {
   outline: 2px solid var(--color-signal-neutral);
   outline-offset: 2px;
   border-radius: 4px;
+}
+
+/* In light mode a flat card on a flat page reads as a box outline. A hairline
+   shadow gives the elevation the dark theme gets for free from contrast. */
+.card-elevation {
+  box-shadow:
+    0 1px 2px rgb(16 24 39 / 0.04),
+    0 1px 3px rgb(16 24 39 / 0.03);
+}
+:root[data-theme='dark'] .card-elevation {
+  box-shadow: inset 0 1px 0 0 rgb(255 255 255 / 0.03);
+}
+
+/* Theme transition, but only on the toggle — animating it on first paint
+   would make the page visibly fade in on every load. */
+:root.theme-transition,
+:root.theme-transition * {
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease;
 }

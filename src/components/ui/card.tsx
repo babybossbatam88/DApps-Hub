@@ -6,7 +6,7 @@ export function Card({ className, ...props }: React.ComponentProps<'div'>) {
     <div
       className={cn(
         'rounded-[var(--radius-card)] border border-terminal-border bg-terminal-surface',
-        'shadow-[0_1px_0_0_rgba(255,255,255,0.03)_inset]',
+        'card-elevation',
         className,
       )}
       {...props}

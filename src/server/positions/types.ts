@@ -42,6 +42,46 @@ export interface PositionEntryView {
   source: 'chain-logs'
 }
 
+export interface RangeView {
+  state: string
+  label: string
+  progressPercent: number
+  distanceToLowerPercent: number
+  distanceToUpperPercent: number
+  nearestEdgePercent: number
+  inRange: boolean
+}
+
+/**
+ * Live valuation. Read through on every request rather than persisted: a
+ * stored price is stale the moment the next block lands, and a stale price
+ * shown without a timestamp is exactly what this product refuses to do.
+ *
+ * Values are in QUOTE UNITS, not dollars. The pool prices one token in the
+ * other and says nothing about what either is worth in USD; calling a USDC
+ * figure "dollars" would assume a peg the system has not checked.
+ */
+export interface PositionValuationView {
+  currentPrice: string
+  currentTick: number
+  blockNumber: string
+  observedAt: string
+  priceSource: string
+  priceIsProxy: boolean
+
+  amount0: string
+  amount1: string
+  value0: string
+  value1: string
+  totalValue: string
+  valueUnit: string
+  allocation0Percent: string | null
+  allocation1Percent: string | null
+
+  range: RangeView
+  outOfRangeNote: string | null
+}
+
 export interface PositionView {
   id: string
   positionNftId: string
@@ -77,6 +117,10 @@ export interface PositionView {
 
   walletAddress: string
   walletLabel: string | null
+
+  /** Non-null only when pool state could be read this request. */
+  valuation: PositionValuationView | null
+  valuationError: { code: string; message: string } | null
 
   entry: PositionEntryView | null
   entryTimestamp: string

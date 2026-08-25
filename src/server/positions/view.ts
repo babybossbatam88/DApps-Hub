@@ -107,6 +107,9 @@ export function toPositionView(row: PositionRow): PositionView {
     walletAddress: row.wallet.address,
     walletLabel: row.wallet.label,
 
+    valuation: null,
+    valuationError: null,
+
     entry: toEntryView(row),
     entryTimestamp: row.entryTimestamp.toISOString(),
     lastSyncedAt: row.lastSyncedAt?.toISOString() ?? null,

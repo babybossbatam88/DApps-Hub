@@ -73,15 +73,30 @@ byte-identical, so the write-once guarantee holds. Verified against real
 PostgreSQL; chain reads went to the local test double, since this sandbox
 blocks RPC egress.
 
-## Phase 4 — Live position valuation 🔜
+## Phase 4 — Live position valuation ✅
 
-- `slot0` → current price; liquidity → `amount0`/`amount1` (all three range cases)
-- `PriceProvider` abstraction with on-chain pool price at rank 0
-- Position card and detail page render real inventory and USD value
+- `PriceProvider` abstraction with the on-chain pool price at rank 0. The pool a
+  position lives in is authoritative for that position: it is the price at which
+  its inventory is actually composed
+- `slot0` → current price and tick, block-pinned; liquidity → `amount0`/`amount1`
+- Range engine with the orientation fix: maths in tick space, presentation in
+  price space, mirrored whenever the quote is token0
+- Valuation is read through on every request, never persisted — a stored price
+  is stale the moment the next block lands
+- Position card renders current price, range state with a live marker, token
+  amounts, per-side value, allocation, and the block it was read at
 
-**Exit:** position value matches an independent calculation to <0.1%.
+**Values are in the pool's QUOTE TOKEN, not dollars.** The pool prices one token
+in the other and says nothing about what either is worth in USD; printing
+"$190.13" for 190.13 USDC would assume a peg nothing has checked. A currency
+arrives with the Binance provider in Phase 10.
 
-## Phase 5 — Fee calculation ⬜
+**Exit:** ✅ position value matches an independent calculation — one deriving the
+price from `sqrtPriceX96` by a different formula ordering — to well under 0.1%.
+Verified live: 190.13 USDC total, 90.20 USDC + 0.001296 cbBTC, allocation
+47.44/52.56, in range at 47.4%, read at block 34000123.
+
+## Phase 5 — Fee calculation 🔜
 
 - `feeGrowthInside` with **uint256 wrap-around masking**
 - Uncollected fees, collected fees from `Collect` events, lifetime totals
@@ -154,6 +169,18 @@ a live network.
 **Exit:** live mode with real data, no fixture reachable, `npm run verify` green.
 
 ---
+
+## Theming
+
+Light and dark, both first-class. **Light is the default**, and the system
+preference is deliberately not followed — a stated preference should not be
+overridden by an OS setting chosen for other reasons. The applied theme is set
+before first paint by an inline script, so there is no flash of the wrong theme,
+and the choice is remembered per browser.
+
+Semantic colours are re-derived per theme rather than reused: the dark green
+`#2ebd85` fails contrast on white, so light mode uses `#067a52`. A P/L figure
+nobody can read is worse than no figure.
 
 ## Companion: the standalone single-file terminal
 

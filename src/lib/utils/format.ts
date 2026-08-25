@@ -144,6 +144,26 @@ export function truncateHex(value: string, lead = 6, tail = 4): string {
   return `${value.slice(0, lead)}…${value.slice(-tail)}`
 }
 
+/**
+ * A figure in its unit of account.
+ *
+ * Takes the unit explicitly rather than assuming dollars: until a USD price
+ * provider exists, position values are denominated in the pool's quote token,
+ * and printing "$190.13" for 190.13 USDC would assume a peg nothing has
+ * checked. `USD` renders with a symbol; anything else renders as a suffix.
+ */
+export function formatMoney(value: Numeric, unit: string, options: UsdOptions = {}): string {
+  const d = toDecimal(value)
+  if (d === null) return NA
+  if (unit === 'USD') return formatUsd(d, options)
+
+  const abs = d.abs()
+  const decimals =
+    options.decimals ?? (abs.gte(1000) ? 2 : abs.gte(1) ? 2 : abs.isZero() ? 2 : 4)
+  const body = groupThousands(abs.toFixed(decimals))
+  return `${sign(d, options.signed)}${body} ${unit}`
+}
+
 /** Uniswap fee tier (hundredths of a bip) -> "0.30%". */
 export function formatFeeTier(feeTier: number): string {
   return `${(feeTier / 10_000).toFixed(2)}%`

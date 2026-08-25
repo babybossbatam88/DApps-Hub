@@ -19,15 +19,16 @@ is built so Uniswap V4 and further chains are additions, not rewrites.
 
 ---
 
-## Current status — Phase 3 of 13 complete
+## Current status — Phase 4 of 13 complete
 
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | Architecture, UI shell, database, real Base RPC connection | ✅ |
 | 2 | Public wallet tracking — add, validate, sync balances | ✅ |
 | 3 | Uniswap V3 position discovery + bit-exact TickMath | ✅ |
-| 4 | Live position valuation | next |
-| 5–7 | Fees, HODL benchmark, divergence | planned |
+| 4 | Live position valuation — price, inventory, range state | ✅ |
+| 5 | Fee calculation | next |
+| 6–7 | HODL benchmark, divergence | planned |
 | 8–13 | Snapshots, rebalance engine, Binance, alerts, hardening | planned |
 
 Full breakdown with exit criteria: [`docs/implementation-plan.md`](docs/implementation-plan.md).
@@ -118,6 +119,14 @@ kept in that browser's localStorage.
 | [`docs/integrations.md`](docs/integrations.md) | Contracts, endpoints, rate limits, error taxonomy |
 | [`docs/implementation-plan.md`](docs/implementation-plan.md) | 13 phases with exit criteria |
 | [`docs/deployment.md`](docs/deployment.md) | Vercel, PostgreSQL, cron, security checklist |
+
+## Theming
+
+Light and dark, both first-class, toggled from the top bar and remembered per
+browser. **Light is the default.** The system preference is deliberately not
+followed — a stated preference should not be overridden by an OS setting chosen
+for other reasons. Semantic colours are re-derived per theme rather than reused,
+because the dark-mode green fails contrast on white.
 
 ## Stack
 
