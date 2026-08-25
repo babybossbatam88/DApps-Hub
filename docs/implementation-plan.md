@@ -48,17 +48,32 @@ were verified against a local JSON-RPC test double (`scripts/mock-base-rpc.mjs`)
 because this build sandbox blocks RPC egress; the same path against Base mainnet
 needs one run on an unrestricted network.
 
-## Phase 3 — Uniswap V3 position discovery 🔜
+## Phase 3 — Uniswap V3 position discovery ✅
 
-- `NonfungiblePositionManager` enumeration → `positions()` → factory → pool
-- Token metadata resolution and `Token` upsert (on-chain `decimals`, always)
-- `LPPosition` + write-once `PositionEntrySnapshot`
-- Tick/sqrtPrice math library with bit-exact `TickMath` vectors
+- Full `TickMath` port: `getSqrtRatioAtTick` and its inverse, bit-exact against
+  the three canonical anchors (tick 0 → 2^96, and both tick extremes) and
+  cross-checked against 60-digit decimal exponentiation across the whole range
+- `LiquidityAmounts`: amounts for liquidity in all three range cases, plus the
+  inverse for the simulator; `feeGrowthInside` with uint256 wrap masking
+- `NonfungiblePositionManager` enumeration → `positions()` → factory → pool,
+  all batched through Multicall3 and pinned to one block
+- Token metadata always read from the contract; a token whose `decimals()`
+  reverts fails the position rather than being defaulted to 18
+- `LPPosition`, `Pool`, `Token` upserts; write-once `PositionEntrySnapshot`
+  derived from `IncreaseLiquidity` events, written only when the basis is
+  actually known
+- Positions page renders what discovery establishes; every later figure is
+  labelled with the phase that fills it in
 
-**Exit:** the cbBTC/USDC test position is discovered from its wallet address with
-correct ticks, fee tier, and liquidity; tick math matches on-chain vectors.
+**Exit:** ✅ the cbBTC/USDC test position is discovered from a wallet address
+with ticks −67680/−65400, 0.30% tier, spacing 60, liquidity 61800000, and a
+readable range of 69,206–86,928 USDC per cbBTC. Tick math matches the canonical
+vectors exactly. Re-running discovery three times left the entry snapshot
+byte-identical, so the write-once guarantee holds. Verified against real
+PostgreSQL; chain reads went to the local test double, since this sandbox
+blocks RPC egress.
 
-## Phase 4 — Live position valuation ⬜
+## Phase 4 — Live position valuation 🔜
 
 - `slot0` → current price; liquidity → `amount0`/`amount1` (all three range cases)
 - `PriceProvider` abstraction with on-chain pool price at rank 0

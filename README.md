@@ -19,14 +19,15 @@ is built so Uniswap V4 and further chains are additions, not rewrites.
 
 ---
 
-## Current status — Phase 2 of 13 complete
+## Current status — Phase 3 of 13 complete
 
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | Architecture, UI shell, database, real Base RPC connection | ✅ |
 | 2 | Public wallet tracking — add, validate, sync balances | ✅ |
-| 3 | Uniswap V3 position discovery | next |
-| 4–7 | Valuation, fees, HODL benchmark, divergence | planned |
+| 3 | Uniswap V3 position discovery + bit-exact TickMath | ✅ |
+| 4 | Live position valuation | next |
+| 5–7 | Fees, HODL benchmark, divergence | planned |
 | 8–13 | Snapshots, rebalance engine, Binance, alerts, hardening | planned |
 
 Full breakdown with exit criteria: [`docs/implementation-plan.md`](docs/implementation-plan.md).

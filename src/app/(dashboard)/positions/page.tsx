@@ -1,11 +1,8 @@
 import type { Metadata } from 'next'
-import Link from 'next/link'
-import { Layers } from 'lucide-react'
 import { PageHeader } from '@/components/ui/section'
-import { EmptyState } from '@/components/data/empty-state'
-import { buttonVariants } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { PositionList } from '@/components/positions/position-list'
 
 export const metadata: Metadata = { title: 'Positions' }
 
@@ -26,17 +23,28 @@ export default function PositionsPage() {
       <Card className="mb-6">
         <CardContent className="pt-5">
           <p className="text-[11px] font-semibold tracking-[0.12em] text-terminal-faint uppercase">
-            Each position card will show
+            Established by discovery
           </p>
           <div className="mt-3 flex flex-wrap gap-1.5">
             {[
-              'Pair', 'Protocol', 'Version', 'Chain', 'Fee tier', 'Range status',
-              'Current price', 'Lower / upper price', 'Distance to lower %',
-              'Distance to upper %', 'Position value', 'Token A amount', 'Token B amount',
-              'Uncollected fees', 'Collected fees', 'Total fees', 'Fee APR 24h / 7d / 30d',
-              'Time in range %', 'LP vs HODL $', 'LP vs HODL %', 'Net P/L', 'Age', 'Last synced',
+              'Pair', 'Protocol', 'Version', 'Chain', 'Fee tier', 'Tick bounds',
+              'Lower / upper price', 'Range width', 'Liquidity', 'Entry basis', 'Last synced',
             ].map((field) => (
               <Badge key={field} variant="outline">
+                {field}
+              </Badge>
+            ))}
+          </div>
+          <p className="mt-3 text-[11px] font-semibold tracking-[0.12em] text-terminal-faint uppercase">
+            Arrives in later phases
+          </p>
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {[
+              'Current price (4)', 'Token amounts (4)', 'Position value (4)',
+              'Uncollected fees (5)', 'Fee APR (5)', 'LP vs HODL (6)', 'Divergence (7)',
+              'Time in range (8)', 'Rebalance signal (9)',
+            ].map((field) => (
+              <Badge key={field} variant="outline" className="opacity-60">
                 {field}
               </Badge>
             ))}
@@ -44,16 +52,7 @@ export default function PositionsPage() {
         </CardContent>
       </Card>
 
-      <EmptyState
-        icon={<Layers className="size-6" />}
-        title="No positions discovered"
-        description="Position discovery reads the Uniswap V3 NonfungiblePositionManager on Base for each tracked wallet. Add a public address to begin."
-        action={
-          <Link href="/wallets" className={buttonVariants({ variant: 'primary' })}>
-            Go to Wallets
-          </Link>
-        }
-      />
+      <PositionList />
     </>
   )
 }

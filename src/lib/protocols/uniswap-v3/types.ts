@@ -20,6 +20,8 @@ export const TICK_SPACING_BY_FEE: Record<number, number> = {
 
 /** Raw struct returned by NonfungiblePositionManager.positions(tokenId). */
 export interface RawPosition {
+  /** The NFT id the struct was read for. Not part of the struct itself. */
+  tokenId: bigint
   nonce: bigint
   operator: Address
   token0: Address

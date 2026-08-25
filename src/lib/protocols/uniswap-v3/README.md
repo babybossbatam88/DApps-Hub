@@ -7,13 +7,12 @@ Modules, and the phase that fills each one in:
 | `contracts.ts` | 1 | ✅ addresses + startup verification |
 | `abis.ts` | 1 | ✅ view-only ABIs |
 | `types.ts` | 1 | ✅ raw structs + normalised `PositionState` |
-| `client.ts` | 3 | ⬜ batched multicall reader |
-| `positions.ts` | 3 | ⬜ NFT enumeration → `positions()` |
-| `pools.ts` | 4 | ⬜ factory lookup + `slot0` |
-| `ticks.ts` | 5 | ⬜ `ticks()` reads for both bounds |
-| `math.ts` | 3–4 | ⬜ TickMath / LiquidityAmounts port |
-| `pricing.ts` | 4 | ⬜ sqrtPriceX96 → human price |
-| `fees.ts` | 5 | ⬜ feeGrowthInside with uint256 wrap masking |
+| `math.ts` | 3 | ✅ TickMath + LiquidityAmounts + feeGrowthInside, bit-exact |
+| `positions.ts` | 3 | ✅ NFT enumeration → `positions()` → entry basis from events |
+| `pools.ts` | 3–4 | ✅ factory lookup, pool metadata, `slot0` + accumulators |
+| `ticks.ts` | 5 | ✅ `ticks()` reads for both bounds (wired up in Phase 5) |
+| `pricing.ts` | 4 | ⬜ price provider ranking; raw conversion lives in `math.ts` |
+| `fees.ts` | 5 | ⬜ orchestration; the arithmetic is already in `math.ts` |
 
 Two constraints hold across all of them:
 

@@ -99,6 +99,46 @@ export const NONFUNGIBLE_POSITION_MANAGER_ABI = [
   },
 ] as const
 
+/**
+ * Events, for reconstructing a position's entry basis and lifecycle.
+ *
+ * Events are emitted BY transactions, not sent by them — including them here
+ * does not weaken the read-only guarantee. There is still no ABI entry for any
+ * state-changing function.
+ */
+export const POSITION_MANAGER_EVENTS_ABI = [
+  {
+    type: 'event',
+    name: 'IncreaseLiquidity',
+    inputs: [
+      { name: 'tokenId', type: 'uint256', indexed: true },
+      { name: 'liquidity', type: 'uint128', indexed: false },
+      { name: 'amount0', type: 'uint256', indexed: false },
+      { name: 'amount1', type: 'uint256', indexed: false },
+    ],
+  },
+  {
+    type: 'event',
+    name: 'DecreaseLiquidity',
+    inputs: [
+      { name: 'tokenId', type: 'uint256', indexed: true },
+      { name: 'liquidity', type: 'uint128', indexed: false },
+      { name: 'amount0', type: 'uint256', indexed: false },
+      { name: 'amount1', type: 'uint256', indexed: false },
+    ],
+  },
+  {
+    type: 'event',
+    name: 'Collect',
+    inputs: [
+      { name: 'tokenId', type: 'uint256', indexed: true },
+      { name: 'recipient', type: 'address', indexed: false },
+      { name: 'amount0', type: 'uint256', indexed: false },
+      { name: 'amount1', type: 'uint256', indexed: false },
+    ],
+  },
+] as const
+
 export const UNISWAP_V3_POOL_ABI = [
   {
     type: 'function',
